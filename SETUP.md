@@ -46,18 +46,25 @@ don't keep a stale copy.
 - Notes are private and are never returned in the People list — only on the
   person's own page. So exports (built from the People list) and group shares
   (built server-side from basic fields only) can't include them.
+- Journal entries, reminders (interval + follow-up date), relationships,
+  households and activities are private too: nothing in the export or share
+  code reads those tables. "Last contact" is the newest journal entry, and
+  next-contact / overdue is worked out in the browser (`nextContact` in
+  `js/app.js`).
 - CSV import/export happens in the browser (`js/transfer.js`); the server
   only receives the already-decided create / merge / skip items, in batches
   of 200. Merge only fills empty fields and adds new phones/emails/addresses.
 
 ## Testing locally
 
-`tests/api.test.mjs` (Milestone A) and `tests/api-b.test.mjs` (Milestone B:
-import engine and group sharing) run the acceptance checks against a
+`tests/api.test.mjs` (Milestone A), `tests/api-b.test.mjs` (Milestone B:
+import engine and group sharing) and `tests/api-c.test.mjs` (Milestone C:
+journal, reminders, relationships, households, activities) run the acceptance checks against a
 **fresh** test database (Hub tables + `schema.sql`, users `alice` / `bob`
 granted, `carol` not, all with password `pw`):
 
     node tests/api.test.mjs   http://127.0.0.1:8098/api/api.php path/to/small.jpg
     node tests/api-b.test.mjs http://127.0.0.1:8098/api/api.php path/to/small.jpg
+    node tests/api-c.test.mjs http://127.0.0.1:8098/api/api.php path/to/small.jpg
 
 (Use a fresh database for each file.)

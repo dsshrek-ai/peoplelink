@@ -139,3 +139,106 @@ CREATE TABLE pl_share_invitations (
   FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (to_user_id)   REFERENCES users(id) ON DELETE CASCADE
 ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------- 2026-10-19: Milestone C — journal, reminders, relationships, households, activities ----------
+-- All private to the owner: none of this is ever exported or shared.
+
+-- A household has its own (shared) address; members keep their own phones,
+-- emails and addresses too.
+CREATE TABLE pl_households (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  user_id      INT NOT NULL,
+  name         VARCHAR(100) NOT NULL,
+  street       VARCHAR(255) NULL,
+  city         VARCHAR(100) NULL,
+  region       VARCHAR(100) NULL,
+  postal_code  VARCHAR(20) NULL,
+  country      VARCHAR(100) NULL,
+  phone        VARCHAR(40) NULL,
+  created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY (user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- contact_interval_days NULL = "N/A" (no reminders, never overdue).
+-- follow_up_date is a one-off "get in touch by" date; logging a contact
+-- clears it.
+ALTER TABLE pl_people
+  ADD COLUMN contact_interval_days SMALLINT NULL AFTER notes,
+  ADD COLUMN follow_up_date DATE NULL AFTER contact_interval_days,
+  ADD COLUMN household_id INT NULL AFTER follow_up_date,
+  ADD CONSTRAINT fk_pl_people_household FOREIGN KEY (household_id) REFERENCES pl_households(id) ON DELETE SET NULL;
+
+CREATE TABLE pl_activities (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  user_id      INT NOT NULL,
+  title        VARCHAR(200) NOT NULL,
+  activity_date DATE NOT NULL,
+  start_time   TIME NULL,              -- NULL = all day
+  end_time     TIME NULL,
+  location     VARCHAR(255) NULL,
+  notes        TEXT NULL,
+  status       ENUM('planned','completed','cancelled') NOT NULL DEFAULT 'planned',
+  journaled    TINYINT(1) NOT NULL DEFAULT 0,   -- already added to participants' journals
+  created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY (user_id, activity_date),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE pl_activity_participants (
+  activity_id  INT NOT NULL,
+  person_id    INT NOT NULL,
+  PRIMARY KEY (activity_id, person_id),
+  KEY (person_id),
+  FOREIGN KEY (activity_id) REFERENCES pl_activities(id) ON DELETE CASCADE,
+  FOREIGN KEY (person_id)   REFERENCES pl_people(id) ON DELETE CASCADE
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One entry per person per contact. An activity logged to several people's
+-- journals makes one entry each (activity_id points back to it).
+CREATE TABLE pl_journal_entries (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  user_id         INT NOT NULL,
+  person_id       INT NOT NULL,
+  entry_date      DATE NOT NULL,
+  kind            ENUM('call','text','email','visit','activity','other') NOT NULL DEFAULT 'other',
+  body            TEXT NULL,
+  follow_up_date  DATE NULL,
+  activity_id     INT NULL,
+  created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY (user_id, entry_date),
+  KEY (person_id, entry_date),
+  FOREIGN KEY (user_id)     REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (person_id)   REFERENCES pl_people(id) ON DELETE CASCADE,
+  FOREIGN KEY (activity_id) REFERENCES pl_activities(id) ON DELETE SET NULL
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Photos on a journal entry (files in api/uploads like profile photos).
+CREATE TABLE pl_journal_photos (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  entry_id    INT NOT NULL,
+  photo_key   CHAR(32) NOT NULL,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY (entry_id),
+  FOREIGN KEY (entry_id) REFERENCES pl_journal_entries(id) ON DELETE CASCADE
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One row per link: "related_person_id is person_id's <kind>". The other
+-- side is shown with the inverse (parent <-> child, etc.).
+CREATE TABLE pl_relationships (
+  id                 INT AUTO_INCREMENT PRIMARY KEY,
+  user_id            INT NOT NULL,
+  person_id          INT NOT NULL,
+  related_person_id  INT NOT NULL,
+  kind               ENUM('spouse','partner','parent','child','sibling','grandparent','grandchild','friend','other') NOT NULL,
+  label              VARCHAR(60) NULL,   -- wording for 'other' (e.g. "cousin")
+  created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_pair (person_id, related_person_id),
+  KEY (related_person_id),
+  FOREIGN KEY (user_id)           REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (person_id)         REFERENCES pl_people(id) ON DELETE CASCADE,
+  FOREIGN KEY (related_person_id) REFERENCES pl_people(id) ON DELETE CASCADE
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

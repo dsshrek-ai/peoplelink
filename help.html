@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>Help · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <header class="site-header"></header>
@@ -126,13 +126,68 @@
     <p>It's a copy, not a link — changes either of you make afterwards aren't passed along. You can cancel an invitation from <strong>Groups</strong> → <strong>📨 Invitations</strong> until it's accepted.</p>
   </section>
 
-  <section class="card help-topic" id="coming">
-    <h2>Coming next</h2>
-    <p>Still to come in version 0.1: a journal of conversations and visits, contact reminders, relationships and households, and planned activities. These instructions will be updated as each one arrives.</p>
+  <section class="card help-topic" id="journal">
+    <h2>Notes &amp; Journal</h2>
+    <ul>
+      <li><strong>Notes</strong> (on <strong>✏️ Edit</strong>) are for things that don't change much — kids' names, favorite foods, how you met.</li>
+      <li>The <strong>Journal</strong> is a dated record of each time you're in touch.</li>
+    </ul>
+    <ol>
+      <li>On someone's page, tap <strong>📝 Log contact</strong>.</li>
+      <li>Check the date, choose how (call, text, email, visit, activity, other), and jot down what you talked about.</li>
+      <li>If you need to get back to them, set <strong>Follow up by</strong>.</li>
+      <li>Tap <strong>📷 Add photos</strong> to keep pictures with the entry.</li>
+      <li>Tap <strong>Save</strong>. It shows on their <strong>Journal</strong> tab and on the <strong>Journal</strong> page (under <strong>More</strong> on a phone).</li>
+    </ol>
+    <p>Tap <strong>Edit</strong> on any entry to change or delete it. Journals are private — never shared or exported.</p>
+  </section>
+
+  <section class="card help-topic" id="reminders">
+    <h2>Reminders: staying in touch</h2>
+    <ol>
+      <li>On someone's page (Info tab), find <strong>⏰ Stay in touch</strong>.</li>
+      <li>Under <strong>Get in touch</strong>, choose how often — every week, month, 3 months, year, or <strong>Custom…</strong> for any number of days. Tap <strong>Save</strong>.</li>
+      <li>Each time you <strong>📝 Log contact</strong>, the clock starts over.</li>
+      <li>For a one-time reminder, set <strong>Follow up by</strong> a date instead (or as well). Logging a contact clears it.</li>
+    </ol>
+    <p>Everyone starts on <strong>N/A</strong> — no reminders, never overdue. <strong>Reminders</strong> (under More on a phone) lists who's overdue, due this week, and coming up, and the Dashboard shows the most urgent. On People, the <strong>contact status</strong> filter finds who's overdue or who you haven't talked to in a year.</p>
+  </section>
+
+  <section class="card help-topic" id="relationships">
+    <h2>Family, friends &amp; households</h2>
+    <ol>
+      <li>On someone's page, open the <strong>Family &amp; friends</strong> tab.</li>
+      <li>Choose a person and how they're related (for example, "Tom is Margaret's <strong>child</strong>"), then tap <strong>Add</strong>.</li>
+      <li>The link appears on both pages — Margaret shows on Tom's page as his <strong>parent</strong>.</li>
+    </ol>
+    <p><strong>Households:</strong> on the Info tab, under <strong>🏡 Household</strong>, tap <strong>+ New household</strong> (it starts with this person's address) or join an existing one. The household page has the shared address and home phone, and you can add everyone who lives there. Each person keeps their own phones and emails.</p>
+  </section>
+
+  <section class="card help-topic" id="activities">
+    <h2>Activities</h2>
+    <ol>
+      <li>Tap <strong>Activities</strong>, then <strong>+ Plan activity</strong> (or <strong>📅 Plan activity</strong> on a group to invite the whole group).</li>
+      <li>Give it a title and date; a time and place are optional.</li>
+      <li>Tap <strong>+ Add people</strong>, or pick <strong>+ Add a whole group</strong>.</li>
+      <li>Save. From the activity you can <strong>📅 Add to calendar</strong>, <strong>🗺️ Map</strong> the place, or <strong>✉️ Message everyone</strong>.</li>
+      <li>Afterwards, tap <strong>✅ Mark completed</strong>. Leave <strong>Add it to each person's journal</strong> ticked and it's logged for everyone (and counts as being in touch).</li>
+    </ol>
+    <p>Past activities that weren't marked done show under <strong>Did these happen?</strong></p>
+  </section>
+
+  <section class="card help-topic" id="messaging">
+    <h2>Email or text a group</h2>
+    <ol>
+      <li>Open a group and tap <strong>✉️ Message</strong> — or on People tap <strong>Select</strong>, tick people, and tap <strong>✉️ Message</strong>.</li>
+      <li>Choose <strong>✉️ Email</strong> or <strong>💬 Text</strong>, and untick anyone you want to leave out.</li>
+      <li><strong>Email:</strong> leave <strong>Use BCC</strong> ticked so people don't see each other's addresses. Tap <strong>Open email</strong>.</li>
+      <li><strong>Text:</strong> tap <strong>Open Messages</strong>. This starts a <strong>group text</strong>, so everyone sees everyone's replies. For more than 20 people it offers batches.</li>
+    </ol>
+    <p>The message is sent from your own phone or email app. For a very long list, use <strong>📋 Copy</strong> and paste the addresses yourself.</p>
   </section>
 </main>
-<script src="js/mdw-prefs.js?v=2"></script>
-<script src="js/app.js?v=2"></script>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
 <script>
 renderNav('help.html');
 const topics = [...document.querySelectorAll('.help-topic')];

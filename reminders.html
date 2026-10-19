@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Reminders · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=3">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+<script src="js/dialogs.js?v=3"></script>
+<script>
+renderNav('reminders.html');
+const contentEl = document.getElementById('content');
+let PEOPLE = [];
+
+function reminderRow(p) {
+  const st = contactStatus(p);
+  return `<li class="person-row">
+    <a class="who" href="person.html?id=${p.Id}">${avatarHtml(p, 'sm')}
+      <span class="txt"><div class="name">${escapeHtml(displayName(p))}</div>
+      <div class="sub wrap"><span class="due ${st || ''}">${escapeHtml(dueText(p))}</span>${p.LastContact ? ` · last ${escapeHtml(agoText(p.LastContact))}` : ''}</div></span></a>
+    <button type="button" class="btn small secondary" data-log="${p.Id}">📝 Log</button>
+  </li>`;
+}
+
+function section(title, list, empty) {
+  return `<div class="card"><h2>${title} <span class="muted small">${list.length || ''}</span></h2>
+    ${list.length ? `<ul class="person-list">${list.map(reminderRow).join('')}</ul>` : `<p class="empty">${empty}</p>`}</div>`;
+}
+
+function render() {
+  const withNext = PEOPLE.filter(p => contactStatus(p)).map(p => ({ p, n: nextContact(p) }))
+    .sort((a, b) => a.n.date.localeCompare(b.n.date)).map(x => x.p);
+  const overdue = withNext.filter(p => contactStatus(p) === 'overdue');
+  const soon = withNext.filter(p => contactStatus(p) === 'soon');
+  const later = withNext.filter(p => contactStatus(p) === 'later');
+  const recent = PEOPLE.filter(p => p.Status === 'active' && p.LastContact && daysFromToday(p.LastContact) >= -14)
+    .sort((a, b) => b.LastContact.localeCompare(a.LastContact));
+  const tracked = PEOPLE.filter(p => p.Status === 'active' && (p.ContactIntervalDays || p.FollowUpDate)).length;
+
+  contentEl.innerHTML = `
+    <h1 class="page-title">⏰ Reminders</h1>
+    ${tracked ? '' : `<div class="note" style="margin-bottom:0.9rem">No reminders yet. Open someone's page and choose how often to <strong>get in touch</strong> (every month, every 3 months…), or set a <strong>follow up by</strong> date. People left on N/A never show up here.</div>`}
+    ${section('🔴 Overdue', overdue, 'Nothing overdue. 🎉')}
+    ${section('🟡 Due this week', soon, 'Nothing due in the next 7 days.')}
+    ${later.length ? section('Coming up', later, '') : ''}
+    <div class="card"><h2>✅ Recently in touch <span class="muted small">last 14 days</span></h2>
+      ${recent.length ? `<ul class="person-list">${recent.map(p => `<li class="person-row"><a class="who" href="person.html?id=${p.Id}">${avatarHtml(p, 'sm')}
+        <span class="txt"><div class="name">${escapeHtml(displayName(p))}</div><div class="sub">${escapeHtml(agoText(p.LastContact))}</div></span></a></li>`).join('')}</ul>`
+        : '<p class="empty">No contacts logged in the last two weeks.</p>'}</div>`;
+  contentEl.querySelectorAll('[data-log]').forEach(b => b.addEventListener('click', () =>
+    openLogContact(PEOPLE.find(p => p.Id === Number(b.dataset.log)), { onSaved: load })));
+}
+
+async function load() {
+  try {
+    PEOPLE = (await fetchData('people')).People;
+    render();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+}
+load();
+</script>
+</body>
+</html>

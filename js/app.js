@@ -1,7 +1,7 @@
 // PeopleLink shared helpers: config, login, API calls, navigation, and the
 // small formatting functions every page uses.
 
-const APP_VERSION = '0.1.0 (Milestone B)';
+const APP_VERSION = '0.1.0';
 
 const CONFIG = {
   API_URL: 'https://seniorfamily.org/peoplelink-api/api.php',
@@ -66,29 +66,33 @@ async function postForm(action, formData) {
 
 // ---- Page chrome ----
 
+// tab: shown in the phone tab bar; everything else lives under "More".
 const NAV = [
-  { href: 'index.html', label: 'Dashboard', icon: '🏠' },
-  { href: 'people.html', label: 'People', icon: '👤' },
-  { href: 'groups.html', label: 'Groups', icon: '👥' },
+  { href: 'index.html', label: 'Dashboard', icon: '🏠', tab: true },
+  { href: 'people.html', label: 'People', icon: '👤', tab: true },
+  { href: 'groups.html', label: 'Groups', icon: '👥', tab: true },
+  { href: 'activities.html', label: 'Activities', icon: '📅', tab: true },
+  { href: 'journal.html', label: 'Journal', icon: '📝' },
+  { href: 'reminders.html', label: 'Reminders', icon: '⏰' },
   { href: 'help.html', label: 'Help', icon: '❓' },
   { href: 'about.html', label: 'About', icon: 'ⓘ' },
 ];
+const MORE_PAGES = ['more.html', 'journal.html', 'reminders.html', 'help.html', 'about.html', 'invitations.html'];
 
 // Fills <header class="site-header"> and adds the phone-size tab bar.
 function renderNav(current) {
   const header = document.querySelector('header.site-header');
-  const links = NAV.map(n =>
-    `<a href="${n.href}"${n.href === current ? ' aria-current="page"' : ''}><span class="nav-icon" aria-hidden="true">${n.icon}</span><span>${n.label}</span></a>`
-  ).join('');
+  const link = (n, on) => `<a href="${n.href}"${on ? ' aria-current="page"' : ''}><span class="nav-icon" aria-hidden="true">${n.icon}</span><span>${n.label}</span></a>`;
   header.innerHTML = `
     <div class="topbar">
       <a class="brand" href="index.html"><span aria-hidden="true">🤝</span> PeopleLink</a>
-      <nav class="top-nav" aria-label="Main">${links}</nav>
+      <nav class="top-nav" aria-label="Main">${NAV.map(n => link(n, n.href === current)).join('')}</nav>
     </div>`;
   const tabs = document.createElement('nav');
   tabs.className = 'tab-bar';
   tabs.setAttribute('aria-label', 'Main');
-  tabs.innerHTML = links;
+  tabs.innerHTML = NAV.filter(n => n.tab).map(n => link(n, n.href === current)).join('')
+    + link({ href: 'more.html', label: 'More', icon: '☰' }, MORE_PAGES.includes(current));
   document.body.appendChild(tabs);
 }
 
@@ -300,4 +304,176 @@ function groupChip(g, href) {
   const style = g.Color ? ` style="--chip:${escapeHtml(g.Color)}"` : '';
   const inner = `${g.Icon ? `<span aria-hidden="true">${escapeHtml(g.Icon)}</span> ` : ''}${escapeHtml(g.Name)}`;
   return href ? `<a class="chip" href="${href}"${style}>${inner}</a>` : `<span class="chip"${style}>${inner}</span>`;
+}
+
+// ---- Dates as 'YYYY-MM-DD' (local) ----
+
+function ymdOf(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function todayYmd() {
+  return ymdOf(new Date());
+}
+
+function addDaysYmd(ymd, n) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return ymdOf(new Date(y, m - 1, d + n));
+}
+
+function daysFromToday(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const t = todayParts();
+  return Math.round((new Date(y, m - 1, d) - new Date(t.Year, t.Month - 1, t.Day)) / 86400000);
+}
+
+function fmtYmd(ymd, withYear) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const showYear = withYear || y !== todayParts().Year;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(showYear ? { year: 'numeric' } : {}) });
+}
+
+function fmtTime(hm) {
+  if (!hm) return '';
+  const [h, m] = hm.split(':').map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+
+function agoText(ymd) {
+  const n = -daysFromToday(ymd);
+  if (n <= 0) return 'today';
+  if (n === 1) return 'yesterday';
+  if (n < 60) return `${n} days ago`;
+  if (n < 730) return `${Math.round(n / 30)} months ago`;
+  return `${Math.round(n / 365)} years ago`;
+}
+
+// ---- Stay in touch ----
+
+const INTERVALS = [
+  { days: 7, label: 'Every week' }, { days: 14, label: 'Every 2 weeks' }, { days: 30, label: 'Every month' },
+  { days: 42, label: 'Every 6 weeks' }, { days: 91, label: 'Every 3 months' }, { days: 182, label: 'Every 6 months' },
+  { days: 365, label: 'Every year' },
+];
+
+function intervalLabel(days) {
+  if (!days) return 'N/A';
+  const known = INTERVALS.find(i => i.days === days);
+  return known ? known.label : `Every ${days} days`;
+}
+
+// When to get in touch next: the earlier of the follow-up date and
+// last contact + interval (never contacted = due now). null = no reminder.
+function nextContact(p) {
+  const dates = [];
+  if (p.FollowUpDate) dates.push({ date: p.FollowUpDate, why: 'follow-up' });
+  if (p.ContactIntervalDays) {
+    dates.push(p.LastContact
+      ? { date: addDaysYmd(p.LastContact, p.ContactIntervalDays), why: 'interval' }
+      : { date: todayYmd(), why: 'never' });
+  }
+  if (!dates.length) return null;
+  dates.sort((a, b) => a.date.localeCompare(b.date));
+  return dates[0];
+}
+
+// 'overdue' | 'soon' (within 7 days) | 'later' | null (no reminder / not active)
+function contactStatus(p) {
+  if (p.Status !== 'active') return null;
+  const n = nextContact(p);
+  if (!n) return null;
+  const d = daysFromToday(n.date);
+  return d < 0 ? 'overdue' : d <= 7 ? 'soon' : 'later';
+}
+
+function dueText(p) {
+  const n = nextContact(p);
+  if (!n) return '';
+  const d = daysFromToday(n.date);
+  const when = d < 0 ? `${-d} day${d === -1 ? '' : 's'} overdue` : d === 0 ? 'due today' : d === 1 ? 'due tomorrow' : `due in ${d} days`;
+  if (n.why === 'never') return `${intervalLabel(p.ContactIntervalDays).toLowerCase()} · no contact logged yet`;
+  if (n.why === 'follow-up') return `follow-up ${when}`;
+  return `${intervalLabel(p.ContactIntervalDays).toLowerCase()} · ${when}`;
+}
+
+// ---- Journal / relationships ----
+
+const JOURNAL_KINDS = [
+  { v: 'call', label: 'Call', icon: '📞' }, { v: 'text', label: 'Text', icon: '💬' }, { v: 'email', label: 'Email', icon: '✉️' },
+  { v: 'visit', label: 'Visit', icon: '🏠' }, { v: 'activity', label: 'Activity', icon: '🎉' }, { v: 'other', label: 'Other', icon: '📝' },
+];
+function kindInfo(v) {
+  return JOURNAL_KINDS.find(k => k.v === v) || JOURNAL_KINDS[5];
+}
+
+const RELATIONSHIP_KINDS = [
+  ['spouse', 'Spouse'], ['partner', 'Partner'], ['parent', 'Parent'], ['child', 'Child'], ['sibling', 'Sibling'],
+  ['grandparent', 'Grandparent'], ['grandchild', 'Grandchild'], ['friend', 'Friend'], ['other', 'Other'],
+];
+function relLabel(r) {
+  if (r.Kind === 'other') return r.Label || 'Related';
+  const k = RELATIONSHIP_KINDS.find(x => x[0] === r.Kind);
+  return k ? k[1] : 'Related';
+}
+
+// ---- Group email / text links (sent from your own phone or email app) ----
+
+const GROUP_TEXT_LIMIT = 20;
+
+function mobileNumber(p) {
+  const m = p.Phones.find(x => x.Label === 'mobile') || p.Phones[0];
+  return m ? dialable(m.Value) : '';
+}
+
+function primaryEmail(p) {
+  return p.Emails[0] ? p.Emails[0].Value : '';
+}
+
+function isApple() {
+  return /iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent);
+}
+
+// iPhone/Mac: sms:/open?addresses=a,b ; Android and others: sms:a,b
+function groupSmsUrl(numbers) {
+  return isApple() ? `sms:/open?addresses=${numbers.join(',')}` : `sms:${numbers.join(',')}`;
+}
+
+function groupMailUrl(emails, useBcc) {
+  const list = emails.map(encodeURIComponent).join(',');
+  return useBcc ? `mailto:?bcc=${list}` : `mailto:${list}`;
+}
+
+// ---- Photos (journal) ----
+
+function resizeImage(file, maxSide, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(b => (b ? resolve(b) : reject(new Error('Could not process that image.'))), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image file.')); };
+    img.src = url;
+  });
+}
+
+async function uploadJournalPhoto(entryId, file) {
+  const [full, thumb] = await Promise.all([resizeImage(file, 1600, 0.85), resizeImage(file, 400, 0.8)]);
+  const fd = new FormData();
+  fd.set('entryId', String(entryId));
+  fd.set('full', full, 'full.jpg');
+  fd.set('thumb', thumb, 'thumb.jpg');
+  return postForm('addJournalPhoto', fd);
 }

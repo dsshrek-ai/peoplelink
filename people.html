@@ -8,13 +8,14 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>People · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page" id="content">Loading&hellip;</main>
-<script src="js/mdw-prefs.js?v=2"></script>
-<script src="js/app.js?v=2"></script>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+<script src="js/dialogs.js?v=3"></script>
 <script>
 renderNav('people.html');
 const contentEl = document.getElementById('content');
@@ -32,6 +33,7 @@ const filters = {
   status: qsParam('status') || 'active',
   pinned: qsParam('pinned') === '1',
   birthdays: qsParam('birthdays') === '1',
+  contact: qsParam('contact') || '',
   sort: (() => { try { return localStorage.getItem(SORT_KEY) || 'first'; } catch (e) { return 'first'; } })(),
 };
 
@@ -42,6 +44,7 @@ function syncUrl() {
   if (filters.status !== 'active') p.set('status', filters.status);
   if (filters.pinned) p.set('pinned', '1');
   if (filters.birthdays) p.set('birthdays', '1');
+  if (filters.contact) p.set('contact', filters.contact);
   const s = p.toString();
   history.replaceState({}, '', 'people.html' + (s ? '?' + s : ''));
 }
@@ -63,6 +66,14 @@ function matches(p) {
   if (filters.group && filters.group !== 'none' && !p.GroupIds.includes(Number(filters.group))) return false;
   if (filters.pinned && !p.Pinned) return false;
   if (filters.birthdays && !(p.Birthday && p.Birthday.Month === todayParts().Month)) return false;
+  if (filters.contact) {
+    const st = contactStatus(p);
+    if (filters.contact === 'overdue' && st !== 'overdue') return false;
+    if (filters.contact === 'due' && !['overdue', 'soon'].includes(st)) return false;
+    if (filters.contact === 'tracked' && !(p.ContactIntervalDays || p.FollowUpDate)) return false;
+    if (filters.contact === 'recent' && !(p.LastContact && daysFromToday(p.LastContact) >= -30)) return false;
+    if (filters.contact === 'none' && !(!p.LastContact || daysFromToday(p.LastContact) < -365)) return false;
+  }
   if (filters.q) {
     const hay = p._hay;
     const qDigits = dialable(filters.q);
@@ -81,6 +92,8 @@ function subLine(p) {
   if (p.Phones[0]) bits.push(p.Phones[0].Value);
   else if (p.Emails[0]) bits.push(p.Emails[0].Value);
   if (filters.birthdays && p.Birthday) bits.unshift(`🎂 ${MONTHS[p.Birthday.Month - 1]} ${p.Birthday.Day}`);
+  if (filters.contact && contactStatus(p)) bits.unshift(dueText(p));
+  else if (filters.contact === 'recent' && p.LastContact) bits.unshift(`last contact ${agoText(p.LastContact)}`);
   return bits.join(' · ');
 }
 
@@ -104,6 +117,10 @@ function renderShell() {
       </select>
       <label class="filter-toggle"><input type="checkbox" id="f-pinned" ${filters.pinned ? 'checked' : ''}> ⭐ Pinned</label>
       <label class="filter-toggle"><input type="checkbox" id="f-bday" ${filters.birthdays ? 'checked' : ''}> 🎂 This month</label>
+      <select id="f-contact" aria-label="Keeping in touch">
+        ${[['', 'Any contact status'], ['overdue', 'Overdue'], ['due', 'Due this week or overdue'], ['tracked', 'Has a reminder'], ['recent', 'In touch in last 30 days'], ['none', 'No contact in a year']].map(([v, l]) =>
+          `<option value="${v}" ${filters.contact === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
     </div>
     <div class="bulk-bar" id="bulk-bar">
       <span class="count" id="bulk-count">0 selected</span>
@@ -114,6 +131,7 @@ function renderShell() {
       <select id="bulk-status" aria-label="Status for selected people">
         <option value="">Set status…</option><option value="active">Active</option><option value="archived">Archived</option><option value="deceased">Deceased</option>
       </select>
+      <button type="button" class="btn secondary small" id="bulk-msg">✉️ Message</button>
       <button type="button" class="btn secondary small" id="bulk-export">Export</button>
       <button type="button" class="btn secondary small" id="bulk-done">Done</button>
     </div>
@@ -129,9 +147,14 @@ function renderShell() {
   on('f-status', 'change', e => { filters.status = e.target.value; syncUrl(); renderList(); });
   on('f-pinned', 'change', e => { filters.pinned = e.target.checked; syncUrl(); renderList(); });
   on('f-bday', 'change', e => { filters.birthdays = e.target.checked; syncUrl(); renderList(); });
+  on('f-contact', 'change', e => { filters.contact = e.target.value; syncUrl(); renderList(); });
   on('f-sort', 'change', e => { filters.sort = e.target.value; try { localStorage.setItem(SORT_KEY, filters.sort); } catch (x) {} renderList(); });
   on('select-btn', 'click', () => setSelecting(!selecting));
   on('bulk-done', 'click', () => setSelecting(false));
+  on('bulk-msg', 'click', () => {
+    if (!selected.size) { showStatus('Select some people first.', true); return; }
+    openMessage(PEOPLE.filter(p => selected.has(p.Id)), `${selected.size} people`);
+  });
   on('bulk-export', 'click', () => {
     if (!selected.size) { showStatus('Select some people first.', true); return; }
     try { sessionStorage.setItem('plExportIds', JSON.stringify([...selected])); } catch (e) {}

@@ -8,16 +8,17 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>Group · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page narrow" id="content">Loading&hellip;</main>
 <dialog id="group-dlg" aria-label="Group"></dialog>
 <dialog id="add-dlg" aria-labelledby="ad-title"></dialog>
-<script src="js/mdw-prefs.js?v=2"></script>
-<script src="js/app.js?v=2"></script>
-<script src="js/groups.js?v=2"></script>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+<script src="js/groups.js?v=3"></script>
+<script src="js/dialogs.js?v=3"></script>
 <script>
 renderNav('groups.html');
 const contentEl = document.getElementById('content');
@@ -43,6 +44,8 @@ function render() {
       <p class="muted small">${shown.length} ${shown.length === 1 ? 'person' : 'people'}${hidden ? ` (plus ${hidden} archived)` : ''}</p>
       <div class="btn-row">
         <button type="button" class="btn" id="add-btn">+ Add people</button>
+        ${shown.length ? '<button type="button" class="btn secondary" id="msg-btn">✉️ Message</button>' : ''}
+        <a class="btn secondary" href="activity.html?group=${G.Id}">📅 Plan activity</a>
         <a class="btn secondary" href="edit.html?group=${G.Id}">+ New person</a>
         <a class="btn secondary" href="share.html?group=${G.Id}">📤 Share</a>
         <a class="btn secondary" href="export.html?group=${G.Id}">⬇️ Export</a>
@@ -61,6 +64,8 @@ function render() {
     ${hidden ? `<p class="small"><a href="people.html?group=${G.Id}&status=archived">See archived members</a></p>` : ''}`;
 
   document.getElementById('add-btn').addEventListener('click', openAdd);
+  const mb = document.getElementById('msg-btn');
+  if (mb) mb.addEventListener('click', () => openMessage(shown, G.Name));
   document.getElementById('edit-btn').addEventListener('click', () => openGroupDialog(G, () => load()));
   document.getElementById('arch-btn').addEventListener('click', toggleArchive);
   document.getElementById('del-btn').addEventListener('click', removeGroup);

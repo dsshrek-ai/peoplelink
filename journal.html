@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Journal · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=3">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<dialog id="pick-dlg" aria-labelledby="pk-title"></dialog>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+<script src="js/dialogs.js?v=3"></script>
+<script>
+renderNav('journal.html');
+const contentEl = document.getElementById('content');
+let PEOPLE = [];
+let ENTRIES = [];
+let more = false;
+const filters = { q: '', kind: '' };
+const personById = id => PEOPLE.find(p => p.Id === id);
+
+function visible() {
+  const words = filters.q.toLowerCase().split(/\s+/).filter(Boolean);
+  return ENTRIES.filter(e => {
+    if (filters.kind && e.Kind !== filters.kind) return false;
+    if (!words.length) return true;
+    const p = personById(e.PersonId);
+    const hay = `${p ? fullName(p) + ' ' + (p.Nickname || '') : ''} ${e.Body || ''}`.toLowerCase();
+    return words.every(w => hay.includes(w));
+  });
+}
+
+function renderList() {
+  const list = visible();
+  let lastMonth = '';
+  document.getElementById('list').innerHTML = list.length ? list.map(e => {
+    const p = personById(e.PersonId);
+    const k = kindInfo(e.Kind);
+    const month = e.Date.slice(0, 7);
+    const head = month !== lastMonth ? `<li class="month-head">${escapeHtml(new Date(e.Date + 'T00:00:00').toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}</li>` : '';
+    lastMonth = month;
+    return `${head}<li class="jentry">
+      <div class="jhead">${p ? avatarHtml(p, 'sm') : ''}
+        <span><a href="person.html?id=${e.PersonId}#journal"><strong>${escapeHtml(p ? displayName(p) : 'Someone')}</strong></a>
+        <div class="small muted">${k.icon} ${escapeHtml(k.label)} · ${escapeHtml(fmtYmd(e.Date, true))}</div></span>
+        <button type="button" class="btn small secondary jedit" data-edit="${e.Id}">Edit</button></div>
+      ${e.Body ? `<div class="notes-text">${escapeHtml(e.Body)}</div>` : ''}
+      ${e.Photos.length ? `<div class="jphotos">${e.Photos.map(ph => `<a class="jphoto" href="${escapeHtml(photoUrl(ph.Key, false))}" target="_blank"><img src="${escapeHtml(photoUrl(ph.Key, true))}" alt="Photo"></a>`).join('')}</div>` : ''}
+      ${e.FollowUpDate ? `<div class="small muted">↪ Follow up by ${escapeHtml(fmtYmd(e.FollowUpDate, true))}</div>` : ''}
+    </li>`;
+  }).join('') : `<li class="empty">${ENTRIES.length ? 'No entries match.' : 'Nothing logged yet. Tap <strong>+ Log contact</strong> after a call or visit.'}</li>`;
+  document.getElementById('older').hidden = !more;
+  document.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
+    const e = ENTRIES.find(x => x.Id === Number(b.dataset.edit));
+    const p = personById(e.PersonId);
+    if (p) openLogContact(p, { entry: e, onSaved: load });
+  }));
+}
+
+function render() {
+  contentEl.innerHTML = `
+    <div class="card-head"><h1 class="page-title" style="margin:0">📝 Journal</h1><button type="button" class="btn small" id="add">+ Log contact</button></div>
+    <p class="muted small">Every call, text, visit and activity you've logged, newest first. Private to you.</p>
+    <div class="toolbar">
+      <input type="search" class="search" id="q" placeholder="Search names and notes…" aria-label="Search the journal">
+      <select id="kind" aria-label="Kind"><option value="">All kinds</option>${JOURNAL_KINDS.map(k => `<option value="${k.v}">${k.icon} ${k.label}</option>`).join('')}</select>
+    </div>
+    <ul class="jlist" id="list"></ul>
+    <p><button type="button" class="btn secondary" id="older" hidden>Show older entries</button></p>`;
+  document.getElementById('q').addEventListener('input', e => { filters.q = e.target.value; renderList(); });
+  document.getElementById('kind').addEventListener('change', e => { filters.kind = e.target.value; renderList(); });
+  document.getElementById('add').addEventListener('click', pickPerson);
+  document.getElementById('older').addEventListener('click', loadOlder);
+  renderList();
+}
+
+// Who is the new entry about?
+function pickPerson() {
+  const dlg = document.getElementById('pick-dlg');
+  const list = PEOPLE.filter(p => p.Status !== 'archived').sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
+  dlg.innerHTML = `<div class="dlg"><h2 id="pk-title">Who did you talk to?</h2>
+    <input type="search" id="pk-q" placeholder="Search…" aria-label="Search people">
+    <div class="pick-list" id="pk-list">${list.map(p => `<label data-name="${escapeHtml((fullName(p) + ' ' + (p.Nickname || '')).toLowerCase())}"><input type="radio" name="pk" value="${p.Id}"> ${avatarHtml(p, 'sm')} ${escapeHtml(displayName(p))}</label>`).join('')}</div>
+    <div class="dlg-actions"><button type="button" class="btn secondary" id="pk-cancel">Cancel</button></div></div>`;
+  dlg.querySelector('#pk-cancel').addEventListener('click', () => dlg.close());
+  const q = dlg.querySelector('#pk-q');
+  q.addEventListener('input', () => {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    dlg.querySelectorAll('#pk-list label').forEach(l => { l.hidden = !words.every(w => l.dataset.name.includes(w)); });
+  });
+  dlg.querySelectorAll('input[name=pk]').forEach(i => i.addEventListener('change', () => {
+    dlg.close();
+    openLogContact(personById(Number(i.value)), { onSaved: load });
+  }));
+  dlg.showModal();
+  q.focus();
+}
+
+async function loadOlder() {
+  const oldest = ENTRIES[ENTRIES.length - 1];
+  const data = await fetchData('journal', { before: oldest.Date });
+  ENTRIES = ENTRIES.concat(data.Entries);
+  more = data.Entries.length === 300;
+  renderList();
+}
+
+async function load() {
+  try {
+    const [j, p] = await Promise.all([fetchData('journal'), fetchData('people')]);
+    ENTRIES = j.Entries;
+    PEOPLE = p.People;
+    more = ENTRIES.length === 300;
+    if (!document.getElementById('list')) render(); else renderList();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+}
+load();
+</script>
+</body>
+</html>

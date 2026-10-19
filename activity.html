@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Activity · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=3">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<dialog id="who-dlg" aria-labelledby="wd-title"></dialog>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+<script src="js/dialogs.js?v=3"></script>
+<script>
+renderNav('activities.html');
+const contentEl = document.getElementById('content');
+const activityId = Number(qsParam('id')) || 0;
+let A = null;            // the saved activity (null while creating)
+let PEOPLE = [];
+let GROUPS = [];
+let editing = !activityId;
+let participants = new Set(qsParam('person') ? [Number(qsParam('person'))] : []);
+const personById = id => PEOPLE.find(p => p.Id === id);
+
+function whenText(a) {
+  const d = fmtYmd(a.Date, true);
+  if (!a.StartTime) return `${d} (all day)`;
+  return `${d}, ${fmtTime(a.StartTime)}${a.EndTime ? '–' + fmtTime(a.EndTime) : ''}`;
+}
+
+function participantChips() {
+  const list = [...participants].map(personById).filter(Boolean);
+  return list.length ? `<div class="chips">${list.map(p => `<span class="chip">${escapeHtml(displayName(p))}${editing ? ` <button type="button" class="chip-x" data-rm="${p.Id}" aria-label="Remove ${escapeHtml(displayName(p))}">✕</button>` : ''}</span>`).join('')}</div>`
+    : '<p class="empty">No one yet.</p>';
+}
+
+function renderView() {
+  const a = A;
+  document.title = `${a.Title} · PeopleLink`;
+  contentEl.innerHTML = `
+    <p class="small"><a href="activities.html">← Activities</a></p>
+    <div class="card">
+      <h1 class="page-title" style="margin:0">${escapeHtml(a.Title)} ${a.Status !== 'planned' ? `<span class="badge ${a.Status}">${a.Status}</span>` : ''}</h1>
+      <p style="margin:0.3rem 0">🗓️ ${escapeHtml(whenText(a))}</p>
+      ${a.Location ? `<p style="margin:0.3rem 0">📍 ${escapeHtml(a.Location)} <button type="button" class="btn small secondary" id="map-btn">🗺️ Map</button></p>` : ''}
+      ${a.Notes ? `<p class="notes-text">${escapeHtml(a.Notes)}</p>` : ''}
+      <div class="btn-row" style="margin-top:0.6rem">
+        <button type="button" class="btn secondary" id="edit-btn">✏️ Edit</button>
+        <button type="button" class="btn secondary" id="cal-btn">📅 Add to calendar</button>
+        ${participants.size ? '<button type="button" class="btn secondary" id="msg-btn">✉️ Message everyone</button>' : ''}
+      </div>
+    </div>
+    <div class="card"><h2>With</h2>${participantChips()}</div>
+    <div class="card">
+      <h2>Status</h2>
+      ${a.Status === 'planned' ? `
+        <label class="inline"><input type="checkbox" id="log-it" checked> Add it to each person's journal (counts as getting in touch)</label>
+        <div class="btn-row" style="margin-top:0.5rem"><button type="button" class="btn" id="done-btn">✅ Mark completed</button>
+          <button type="button" class="btn secondary" id="cancel-btn">Cancel activity</button></div>`
+        : `<p>This activity is <strong>${a.Status}</strong>.${a.Journaled ? ' It was added to everyone\'s journal.' : ''}</p>
+          <div class="btn-row">${a.Status === 'completed' && !a.Journaled && participants.size ? '<button type="button" class="btn secondary" id="journal-btn">Add to journals</button>' : ''}
+          <button type="button" class="btn secondary" id="reopen-btn">Set back to planned</button></div>`}
+      <p style="margin-top:0.8rem"><button type="button" class="btn danger small" id="del-btn">Delete activity</button></p>
+    </div>`;
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+  on('edit-btn', () => { editing = true; renderEdit(); });
+  on('map-btn', () => MdwPrefs.navigate(a.Location));
+  on('cal-btn', () => MdwPrefs.addToCalendar({
+    uid: `peoplelink-activity-${a.Id}@peoplelink`, title: a.Title, date: a.Date, startTime: a.StartTime, endTime: a.EndTime,
+    location: a.Location || '', reminderMinutes: null,
+    notes: [a.Notes, [...participants].map(personById).filter(Boolean).map(displayName).join(', ')].filter(Boolean).join('\n'),
+  }));
+  on('msg-btn', () => openMessage([...participants].map(personById).filter(Boolean), `"${a.Title}"`));
+  on('done-btn', () => complete(document.getElementById('log-it').checked));
+  on('journal-btn', () => complete(true));
+  on('cancel-btn', () => setStatus('cancelled'));
+  on('reopen-btn', () => setStatus('planned'));
+  on('del-btn', removeActivity);
+}
+
+function renderEdit() {
+  const a = A || { Title: '', Date: todayYmd(), StartTime: '', EndTime: '', Location: '', Notes: '', Status: 'planned' };
+  contentEl.innerHTML = `
+    <p class="small"><a href="${A ? `activity.html?id=${A.Id}` : 'activities.html'}">← ${A ? 'Back' : 'Activities'}</a></p>
+    <h1 class="page-title">${A ? 'Edit activity' : 'Plan an activity'}</h1>
+    <form id="form" class="card" novalidate>
+      <label for="a-title">What</label>
+      <input type="text" id="a-title" maxlength="200" value="${escapeHtml(a.Title)}" placeholder="Lunch with Mom, Choir party, Visit Grandpa…">
+      <div class="row3">
+        <div><label for="a-date">Date</label><input type="date" id="a-date" value="${escapeHtml(a.Date)}"></div>
+        <div><label for="a-start">Start <span class="muted">(optional)</span></label><input type="time" id="a-start" value="${escapeHtml(a.StartTime || '')}"></div>
+        <div><label for="a-end">End</label><input type="time" id="a-end" value="${escapeHtml(a.EndTime || '')}"></div>
+      </div>
+      <label for="a-loc">Where <span class="muted">(optional)</span></label>
+      <input type="text" id="a-loc" maxlength="255" value="${escapeHtml(a.Location || '')}">
+      <label for="a-notes">Notes <span class="muted">(optional)</span></label>
+      <textarea id="a-notes" rows="3">${escapeHtml(a.Notes || '')}</textarea>
+      <label>Who's coming</label>
+      <div id="who">${participantChips()}</div>
+      <div class="btn-row" style="margin-top:0.4rem">
+        <button type="button" class="btn secondary small" id="add-people">+ Add people</button>
+        ${GROUPS.length ? `<select id="add-group" style="width:auto"><option value="">+ Add a whole group…</option>${GROUPS.filter(g => !g.Archived).map(g => `<option value="${g.Id}">${escapeHtml(g.Name)}</option>`).join('')}</select>` : ''}
+      </div>
+      <div id="err"></div>
+      <div class="btn-row" style="margin-top:1rem;justify-content:flex-end">
+        <a class="btn secondary" href="${A ? `activity.html?id=${A.Id}` : 'activities.html'}">Cancel</a>
+        <button type="submit" class="btn" id="save-btn">Save</button>
+      </div>
+    </form>`;
+  const refreshWho = () => {
+    document.getElementById('who').innerHTML = participantChips();
+  };
+  document.getElementById('who').addEventListener('click', e => {
+    const b = e.target.closest('[data-rm]');
+    if (b) { participants.delete(Number(b.dataset.rm)); refreshWho(); }
+  });
+  document.getElementById('add-people').addEventListener('click', () => pickPeople(refreshWho));
+  const ag = document.getElementById('add-group');
+  if (ag) ag.addEventListener('change', () => {
+    const gid = Number(ag.value);
+    PEOPLE.filter(p => p.Status === 'active' && p.GroupIds.includes(gid)).forEach(p => participants.add(p.Id));
+    ag.value = '';
+    refreshWho();
+  });
+  document.getElementById('form').addEventListener('submit', e => { e.preventDefault(); save(); });
+  document.getElementById('a-title').focus();
+}
+
+function pickPeople(done) {
+  const dlg = document.getElementById('who-dlg');
+  const list = PEOPLE.filter(p => p.Status !== 'archived').sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
+  dlg.innerHTML = `<div class="dlg"><h2 id="wd-title">Who's coming?</h2>
+    <input type="search" id="wd-q" placeholder="Search…" aria-label="Search people">
+    <div class="pick-list" id="wd-list">${list.map(p => `<label data-name="${escapeHtml((fullName(p) + ' ' + (p.Nickname || '')).toLowerCase())}"><input type="checkbox" value="${p.Id}" ${participants.has(p.Id) ? 'checked' : ''}> ${avatarHtml(p, 'sm')} ${escapeHtml(displayName(p))}</label>`).join('')}</div>
+    <div class="dlg-actions"><button type="button" class="btn" id="wd-done">Done</button></div></div>`;
+  const q = dlg.querySelector('#wd-q');
+  q.addEventListener('input', () => {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    dlg.querySelectorAll('#wd-list label').forEach(l => { l.hidden = !words.every(w => l.dataset.name.includes(w)); });
+  });
+  dlg.querySelectorAll('#wd-list input').forEach(i => i.addEventListener('change', () => {
+    if (i.checked) participants.add(Number(i.value)); else participants.delete(Number(i.value));
+  }));
+  dlg.querySelector('#wd-done').addEventListener('click', () => { dlg.close(); done(); });
+  dlg.showModal();
+  q.focus();
+}
+
+async function save() {
+  const v = id => document.getElementById(id).value;
+  const err = document.getElementById('err');
+  err.innerHTML = '';
+  if (!v('a-title').trim()) { err.innerHTML = '<p class="err">Give it a title.</p>'; return; }
+  if (!v('a-date')) { err.innerHTML = '<p class="err">Pick a date.</p>'; return; }
+  try {
+    const res = await postAction('saveActivity', {
+      id: A ? A.Id : 0, title: v('a-title'), date: v('a-date'), startTime: v('a-start'), endTime: v('a-end'),
+      location: v('a-loc'), notes: v('a-notes'), status: A ? A.Status : 'planned', participantIds: [...participants],
+    });
+    window.location.href = `activity.html?id=${res.Id}`;
+  } catch (e) {
+    err.innerHTML = `<p class="err">${escapeHtml(errorText(e, "Couldn't save."))}</p>`;
+  }
+}
+
+async function complete(logToJournal) {
+  try {
+    const res = await postAction('completeActivity', { id: A.Id, logToJournal });
+    showStatus(res.JournalEntries ? `Completed and added to ${res.JournalEntries} journal${res.JournalEntries === 1 ? '' : 's'}.` : 'Marked completed.');
+    load();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't update it."), true);
+  }
+}
+
+async function setStatus(status) {
+  try {
+    await postAction('saveActivity', {
+      id: A.Id, title: A.Title, date: A.Date, startTime: A.StartTime, endTime: A.EndTime, location: A.Location,
+      notes: A.Notes, status, participantIds: [...participants],
+    });
+    showStatus(status === 'cancelled' ? 'Activity cancelled.' : 'Back to planned.');
+    load();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't update it."), true);
+  }
+}
+
+async function removeActivity() {
+  if (!confirm(`Delete "${A.Title}"? Journal entries already made from it are kept.`)) return;
+  try {
+    await postAction('deleteActivity', { id: A.Id });
+    window.location.href = 'activities.html';
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't delete it."), true);
+  }
+}
+
+async function load() {
+  try {
+    const data = await fetchData('activities');
+    PEOPLE = data.People;
+    GROUPS = data.Groups;
+    if (activityId) {
+      A = data.Activities.find(a => a.Id === activityId);
+      if (!A) { contentEl.innerHTML = '<p class="note">That activity isn\'t in your list. <a href="activities.html">Back to Activities</a></p>'; return; }
+      participants = new Set(A.ParticipantIds);
+    } else if (qsParam('group')) {
+      PEOPLE.filter(p => p.Status === 'active' && p.GroupIds.includes(Number(qsParam('group')))).forEach(p => participants.add(p.Id));
+    }
+    if (editing) renderEdit(); else renderView();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+}
+load();
+</script>
+</body>
+</html>

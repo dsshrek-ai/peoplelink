@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Activities · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=3">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+<script>
+renderNav('activities.html');
+const contentEl = document.getElementById('content');
+let showPast = false;
+
+function activityRow(a, PEOPLE) {
+  const who = a.ParticipantIds.map(id => PEOPLE.find(p => p.Id === id)).filter(Boolean);
+  const d = daysFromToday(a.Date);
+  const when = d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : fmtYmd(a.Date, true);
+  return `<li class="act-row ${a.Status}">
+    <a href="activity.html?id=${a.Id}">
+      <div class="act-date"><span class="m">${escapeHtml(new Date(a.Date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short' }))}</span><span class="d">${Number(a.Date.slice(8))}</span></div>
+      <div class="txt"><strong>${escapeHtml(a.Title)}</strong>${a.Status !== 'planned' ? ` <span class="badge ${a.Status}">${a.Status}</span>` : ''}
+        <div class="small muted">${escapeHtml(when)}${a.StartTime ? ' · ' + escapeHtml(fmtTime(a.StartTime)) : ''}${a.Location ? ' · ' + escapeHtml(a.Location) : ''}</div>
+        ${who.length ? `<div class="small">${who.slice(0, 4).map(p => escapeHtml(displayName(p))).join(', ')}${who.length > 4 ? ` +${who.length - 4}` : ''}</div>` : ''}</div>
+    </a></li>`;
+}
+
+function render(data) {
+  const today = todayYmd();
+  const upcoming = data.Activities.filter(a => a.Status === 'planned' && a.Date >= today);
+  const needsWrapUp = data.Activities.filter(a => a.Status === 'planned' && a.Date < today).reverse();
+  const past = data.Activities.filter(a => a.Status !== 'planned').reverse();
+  contentEl.innerHTML = `
+    <div class="card-head"><h1 class="page-title" style="margin:0">📅 Activities</h1><a class="btn small" href="activity.html">+ Plan activity</a></div>
+    <p class="muted small">Plan a visit, dinner or outing with one person or many. When it's done, mark it completed and it can go into everyone's journal.</p>
+    <div class="card"><h2>Upcoming</h2>
+      ${upcoming.length ? `<ul class="act-list">${upcoming.map(a => activityRow(a, data.People)).join('')}</ul>` : '<p class="empty">Nothing planned. <a href="activity.html">Plan something</a>.</p>'}</div>
+    ${needsWrapUp.length ? `<div class="card"><h2>Did these happen?</h2><p class="muted small">Open one to mark it completed or cancelled.</p>
+      <ul class="act-list">${needsWrapUp.map(a => activityRow(a, data.People)).join('')}</ul></div>` : ''}
+    ${past.length ? `<p><button type="button" class="btn secondary small" id="past-btn">${showPast ? 'Hide' : 'Show'} ${past.length} past</button></p>
+      ${showPast ? `<div class="card"><ul class="act-list">${past.map(a => activityRow(a, data.People)).join('')}</ul></div>` : ''}` : ''}`;
+  const pb = document.getElementById('past-btn');
+  if (pb) pb.addEventListener('click', () => { showPast = !showPast; render(data); });
+}
+
+(async () => {
+  try {
+    render(await fetchData('activities'));
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>

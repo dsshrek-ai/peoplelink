@@ -264,6 +264,10 @@ function personJson(array $p, array $methods, array $addresses, array $groupIds,
     'Emails'       => [],
     'Addresses'    => [],
     'GroupIds'     => $groupIds,
+    'ContactIntervalDays' => $p['contact_interval_days'] !== null ? (int)$p['contact_interval_days'] : null,
+    'FollowUpDate' => $p['follow_up_date'],
+    'HouseholdId'  => $p['household_id'] !== null ? (int)$p['household_id'] : null,
+    'LastContact'  => $p['last_contact'] ?? null,
     'UpdatedAt'    => $p['updated_at'],
   ];
   foreach ($methods as $m) {
@@ -326,6 +330,15 @@ function loadPeople(int $userId, ?array $onlyIds = null, bool $withNotes = false
   foreach (q("SELECT group_id, person_id FROM pl_group_members WHERE person_id IN ($in)", $it, $ids) as $r) {
     $groups[(int)$r['person_id']][] = (int)$r['group_id'];
   }
+  // Last contact = the most recent journal entry.
+  $last = [];
+  foreach (q("SELECT person_id, MAX(entry_date) AS d FROM pl_journal_entries WHERE person_id IN ($in) GROUP BY person_id", $it, $ids) as $r) {
+    $last[(int)$r['person_id']] = $r['d'];
+  }
+  foreach ($people as &$p) {
+    $p['last_contact'] = $last[(int)$p['id']] ?? null;
+  }
+  unset($p);
 
   return array_map(fn($p) => personJson(
     $p, $methods[(int)$p['id']] ?? [], $addresses[(int)$p['id']] ?? [], $groups[(int)$p['id']] ?? [], $withNotes
@@ -433,9 +446,14 @@ function deletePeople(int $userId, array $ids): int {
   if (!$ids) {
     return 0;
   }
-  $keys = q('SELECT photo_key FROM pl_people WHERE photo_key IS NOT NULL AND id IN (' . placeholders($ids) . ')',
-            str_repeat('i', count($ids)), $ids);
-  // Child rows (phones, emails, addresses, group memberships) cascade.
+  $keys = array_merge(
+    q('SELECT photo_key FROM pl_people WHERE photo_key IS NOT NULL AND id IN (' . placeholders($ids) . ')',
+      str_repeat('i', count($ids)), $ids),
+    q('SELECT ph.photo_key FROM pl_journal_photos ph JOIN pl_journal_entries e ON e.id = ph.entry_id
+       WHERE e.person_id IN (' . placeholders($ids) . ')', str_repeat('i', count($ids)), $ids)
+  );
+  // Child rows (phones, emails, addresses, groups, journal, relationships,
+  // activity participation) cascade.
   $n = execCount('DELETE FROM pl_people WHERE user_id = ? AND id IN (' . placeholders($ids) . ')',
                  'i' . str_repeat('i', count($ids)), array_merge([$userId], $ids));
   foreach ($keys as $k) {
@@ -957,6 +975,320 @@ function acceptShare(int $userId, array $b): array {
   return $res + ['GroupId' => $gid];
 }
 
+// ---- Milestone C: dates ----
+
+function dateOrNull($v, string $what): ?string {
+  if ($v === null || $v === '') {
+    return null;
+  }
+  if (!is_string($v) || !preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $v, $m) || !checkdate((int)$m[2], (int)$m[3], (int)$m[1])) {
+    fail("$what must be a real date");
+  }
+  return $v;
+}
+
+function timeOrNull($v, string $what): ?string {
+  if ($v === null || $v === '') {
+    return null;
+  }
+  if (!is_string($v) || !preg_match('/^([01]\d|2[0-3]):([0-5]\d)$/', $v)) {
+    fail("$what must look like 14:30");
+  }
+  return $v;
+}
+
+// ---- Journal ----
+
+const JOURNAL_KINDS = ['call', 'text', 'email', 'visit', 'activity', 'other'];
+const JOURNAL_PHOTO_FULL = 1600;
+const JOURNAL_PHOTO_THUMB = 400;
+
+function journalJson(array $e, array $photos): array {
+  return [
+    'Id' => (int)$e['id'],
+    'PersonId' => (int)$e['person_id'],
+    'Date' => $e['entry_date'],
+    'Kind' => $e['kind'],
+    'Body' => $e['body'],
+    'FollowUpDate' => $e['follow_up_date'],
+    'ActivityId' => $e['activity_id'] !== null ? (int)$e['activity_id'] : null,
+    'Photos' => $photos,
+  ];
+}
+
+// Newest first. $personId limits to one person; $before pages backwards.
+function loadJournal(int $userId, ?int $personId, ?string $before, int $limit): array {
+  $where = 'user_id = ?';
+  $types = 'i';
+  $params = [$userId];
+  if ($personId) {
+    $where .= ' AND person_id = ?';
+    $types .= 'i';
+    $params[] = $personId;
+  }
+  if ($before) {
+    $where .= ' AND entry_date < ?';
+    $types .= 's';
+    $params[] = $before;
+  }
+  $types .= 'i';
+  $params[] = $limit;
+  $rows = q("SELECT * FROM pl_journal_entries WHERE $where ORDER BY entry_date DESC, id DESC LIMIT ?", $types, $params);
+  if (!$rows) {
+    return [];
+  }
+  $ids = array_map(fn($r) => (int)$r['id'], $rows);
+  $photos = [];
+  foreach (q('SELECT id, entry_id, photo_key FROM pl_journal_photos WHERE entry_id IN (' . placeholders($ids) . ') ORDER BY id',
+             str_repeat('i', count($ids)), $ids) as $ph) {
+    $photos[(int)$ph['entry_id']][] = ['Id' => (int)$ph['id'], 'Key' => $ph['photo_key']];
+  }
+  return array_map(fn($r) => journalJson($r, $photos[(int)$r['id']] ?? []), $rows);
+}
+
+function ownEntry(int $userId, int $id): array {
+  $rows = q('SELECT * FROM pl_journal_entries WHERE id = ? AND user_id = ?', 'ii', [$id, $userId]);
+  if (!$rows) {
+    fail('Journal entry not found', 404);
+  }
+  return $rows[0];
+}
+
+// b: { id?, personId, date, kind, body, followUpDate, today }
+function saveJournalEntry(int $userId, array $b): int {
+  $id = (int)($b['id'] ?? 0);
+  $date = dateOrNull($b['date'] ?? null, 'The date') ?? fail('Pick a date');
+  $kind = in_array($b['kind'] ?? '', JOURNAL_KINDS, true) ? $b['kind'] : 'other';
+  $body = strOrNull($b['body'] ?? null, 65000);
+  $follow = dateOrNull($b['followUpDate'] ?? null, 'The follow-up date');
+  if ($id > 0) {
+    $e = ownEntry($userId, $id);
+    exec1('UPDATE pl_journal_entries SET entry_date = ?, kind = ?, body = ?, follow_up_date = ? WHERE id = ? AND user_id = ?',
+          'ssssii', [$date, $kind, $body, $follow, $id, $userId]);
+    if ($follow !== null) {
+      exec1('UPDATE pl_people SET follow_up_date = ? WHERE id = ? AND user_id = ?', 'sii', [$follow, (int)$e['person_id'], $userId]);
+    }
+    return $id;
+  }
+  $personId = (int)ownPerson($userId, (int)($b['personId'] ?? 0))['id'];
+  $id = exec1('INSERT INTO pl_journal_entries (user_id, person_id, entry_date, kind, body, follow_up_date) VALUES (?, ?, ?, ?, ?, ?)',
+              'iissss', [$userId, $personId, $date, $kind, $body, $follow]);
+  // A new follow-up date replaces the person's; otherwise getting in touch
+  // (today or later -- not a back-dated entry) clears the old one.
+  $today = dateOrNull($b['today'] ?? null, 'Today') ?? date('Y-m-d');
+  if ($follow !== null) {
+    exec1('UPDATE pl_people SET follow_up_date = ? WHERE id = ? AND user_id = ?', 'sii', [$follow, $personId, $userId]);
+  } elseif ($date >= $today) {
+    exec1('UPDATE pl_people SET follow_up_date = NULL WHERE id = ? AND user_id = ?', 'ii', [$personId, $userId]);
+  }
+  return $id;
+}
+
+function deleteJournalEntry(int $userId, int $id): void {
+  ownEntry($userId, $id);
+  $keys = q('SELECT photo_key FROM pl_journal_photos WHERE entry_id = ?', 'i', [$id]);
+  exec1('DELETE FROM pl_journal_entries WHERE id = ? AND user_id = ?', 'ii', [$id, $userId]);
+  foreach ($keys as $k) {
+    deletePhotoFiles($k['photo_key']);
+  }
+}
+
+function addJournalPhoto(int $userId, int $entryId): array {
+  ownEntry($userId, $entryId);
+  if ((int)q('SELECT COUNT(*) AS n FROM pl_journal_photos WHERE entry_id = ?', 'i', [$entryId])[0]['n'] >= 12) {
+    fail('An entry can have up to 12 photos');
+  }
+  $full = photoBytes($_FILES['full'] ?? null, JOURNAL_PHOTO_FULL);
+  $thumb = photoBytes($_FILES['thumb'] ?? null, JOURNAL_PHOTO_THUMB);
+  $key = bin2hex(random_bytes(16));
+  if (file_put_contents(photoPath($key, false), $full) === false || file_put_contents(photoPath($key, true), $thumb) === false) {
+    deletePhotoFiles($key);
+    fail('Couldn\'t save the photo', 500);
+  }
+  $id = exec1('INSERT INTO pl_journal_photos (entry_id, photo_key) VALUES (?, ?)', 'is', [$entryId, $key]);
+  return ['Id' => $id, 'Key' => $key];
+}
+
+// ---- Relationships ----
+
+const RELATIONSHIP_KINDS = ['spouse', 'partner', 'parent', 'child', 'sibling', 'grandparent', 'grandchild', 'friend', 'other'];
+const RELATIONSHIP_INVERSE = ['parent' => 'child', 'child' => 'parent', 'grandparent' => 'grandchild', 'grandchild' => 'grandparent'];
+
+// Links seen from $personId's side: Kind is what the other person is to them.
+function loadRelationships(int $userId, int $personId): array {
+  $out = [];
+  foreach (q('SELECT * FROM pl_relationships WHERE user_id = ? AND (person_id = ? OR related_person_id = ?) ORDER BY id',
+             'iii', [$userId, $personId, $personId]) as $r) {
+    $mine = (int)$r['person_id'] === $personId;
+    $out[] = [
+      'Id' => (int)$r['id'],
+      'PersonId' => $mine ? (int)$r['related_person_id'] : (int)$r['person_id'],
+      'Kind' => $mine ? $r['kind'] : (RELATIONSHIP_INVERSE[$r['kind']] ?? $r['kind']),
+      'Label' => $r['label'],
+    ];
+  }
+  return $out;
+}
+
+// b: { personId, relatedId, kind, label } -- "relatedId is personId's kind".
+function saveRelationship(int $userId, array $b): int {
+  $a = (int)ownPerson($userId, (int)($b['personId'] ?? 0))['id'];
+  $o = (int)ownPerson($userId, (int)($b['relatedId'] ?? 0))['id'];
+  if ($a === $o) {
+    fail('Pick someone else');
+  }
+  $kind = (string)($b['kind'] ?? '');
+  if (!in_array($kind, RELATIONSHIP_KINDS, true)) {
+    fail('Pick a relationship');
+  }
+  $label = $kind === 'other' ? strOrNull($b['label'] ?? null, 60) : null;
+  // One link per pair, whichever direction it was saved in.
+  exec1('DELETE FROM pl_relationships WHERE user_id = ? AND ((person_id = ? AND related_person_id = ?) OR (person_id = ? AND related_person_id = ?))',
+        'iiiii', [$userId, $a, $o, $o, $a]);
+  return exec1('INSERT INTO pl_relationships (user_id, person_id, related_person_id, kind, label) VALUES (?, ?, ?, ?, ?)',
+               'iiiss', [$userId, $a, $o, $kind, $label]);
+}
+
+// ---- Households ----
+
+function householdJson(array $h, array $memberIds): array {
+  return [
+    'Id' => (int)$h['id'], 'Name' => $h['name'], 'Street' => $h['street'], 'City' => $h['city'], 'Region' => $h['region'],
+    'PostalCode' => $h['postal_code'], 'Country' => $h['country'], 'Phone' => $h['phone'], 'MemberIds' => $memberIds,
+  ];
+}
+
+function loadHouseholds(int $userId): array {
+  $members = [];
+  foreach (q('SELECT id, household_id FROM pl_people WHERE user_id = ? AND household_id IS NOT NULL', 'i', [$userId]) as $r) {
+    $members[(int)$r['household_id']][] = (int)$r['id'];
+  }
+  return array_map(fn($h) => householdJson($h, $members[(int)$h['id']] ?? []),
+                   q('SELECT * FROM pl_households WHERE user_id = ? ORDER BY name', 'i', [$userId]));
+}
+
+function ownHousehold(int $userId, int $id): array {
+  $rows = q('SELECT * FROM pl_households WHERE id = ? AND user_id = ?', 'ii', [$id, $userId]);
+  if (!$rows) {
+    fail('Household not found', 404);
+  }
+  return $rows[0];
+}
+
+// b: { id?, name, street, city, region, postalCode, country, phone, addPersonId? }
+function saveHousehold(int $userId, array $b): int {
+  $id = (int)($b['id'] ?? 0);
+  if ($id > 0) {
+    ownHousehold($userId, $id);
+  }
+  $name = strOrNull($b['name'] ?? null, 100) ?? fail('Give the household a name, like "The Smiths"');
+  $vals = [$name, strOrNull($b['street'] ?? null, 255), strOrNull($b['city'] ?? null, 100), strOrNull($b['region'] ?? null, 100),
+           strOrNull($b['postalCode'] ?? null, 20), strOrNull($b['country'] ?? null, 100), strOrNull($b['phone'] ?? null, 40)];
+  if ($id > 0) {
+    exec1('UPDATE pl_households SET name = ?, street = ?, city = ?, region = ?, postal_code = ?, country = ?, phone = ? WHERE id = ? AND user_id = ?',
+          'sssssssii', array_merge($vals, [$id, $userId]));
+  } else {
+    $id = exec1('INSERT INTO pl_households (name, street, city, region, postal_code, country, phone, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                'sssssssi', array_merge($vals, [$userId]));
+  }
+  if (!empty($b['addPersonId'])) {
+    $pid = (int)ownPerson($userId, (int)$b['addPersonId'])['id'];
+    exec1('UPDATE pl_people SET household_id = ? WHERE id = ? AND user_id = ?', 'iii', [$id, $pid, $userId]);
+  }
+  return $id;
+}
+
+// ---- Activities ----
+
+const ACTIVITY_STATUSES = ['planned', 'completed', 'cancelled'];
+
+function activityJson(array $a, array $participants): array {
+  return [
+    'Id' => (int)$a['id'], 'Title' => $a['title'], 'Date' => $a['activity_date'],
+    'StartTime' => $a['start_time'] !== null ? substr($a['start_time'], 0, 5) : null,
+    'EndTime' => $a['end_time'] !== null ? substr($a['end_time'], 0, 5) : null,
+    'Location' => $a['location'], 'Notes' => $a['notes'], 'Status' => $a['status'],
+    'Journaled' => (bool)$a['journaled'], 'ParticipantIds' => $participants,
+  ];
+}
+
+function loadActivities(int $userId, ?int $personId = null): array {
+  $rows = $personId
+    ? q('SELECT a.* FROM pl_activities a JOIN pl_activity_participants ap ON ap.activity_id = a.id
+         WHERE a.user_id = ? AND ap.person_id = ? ORDER BY a.activity_date DESC, a.start_time', 'ii', [$userId, $personId])
+    : q('SELECT * FROM pl_activities WHERE user_id = ? ORDER BY activity_date, start_time', 'i', [$userId]);
+  if (!$rows) {
+    return [];
+  }
+  $ids = array_map(fn($r) => (int)$r['id'], $rows);
+  $parts = [];
+  foreach (q('SELECT activity_id, person_id FROM pl_activity_participants WHERE activity_id IN (' . placeholders($ids) . ')',
+             str_repeat('i', count($ids)), $ids) as $r) {
+    $parts[(int)$r['activity_id']][] = (int)$r['person_id'];
+  }
+  return array_map(fn($r) => activityJson($r, $parts[(int)$r['id']] ?? []), $rows);
+}
+
+function ownActivity(int $userId, int $id): array {
+  $rows = q('SELECT * FROM pl_activities WHERE id = ? AND user_id = ?', 'ii', [$id, $userId]);
+  if (!$rows) {
+    fail('Activity not found', 404);
+  }
+  return $rows[0];
+}
+
+// b: { id?, title, date, startTime, endTime, location, notes, status, participantIds }
+function saveActivity(int $userId, array $b): int {
+  $id = (int)($b['id'] ?? 0);
+  if ($id > 0) {
+    ownActivity($userId, $id);
+  }
+  $title = strOrNull($b['title'] ?? null, 200) ?? fail('Give the activity a title');
+  $date = dateOrNull($b['date'] ?? null, 'The date') ?? fail('Pick a date');
+  $start = timeOrNull($b['startTime'] ?? null, 'The start time');
+  $end = $start !== null ? timeOrNull($b['endTime'] ?? null, 'The end time') : null;
+  $status = in_array($b['status'] ?? 'planned', ACTIVITY_STATUSES, true) ? ($b['status'] ?? 'planned') : 'planned';
+  $vals = [$title, $date, $start, $end, strOrNull($b['location'] ?? null, 255), strOrNull($b['notes'] ?? null, 65000), $status];
+  $people = ownedIds($userId, 'pl_people', (array)($b['participantIds'] ?? []));
+
+  $conn = db();
+  $conn->begin_transaction();
+  if ($id > 0) {
+    exec1('UPDATE pl_activities SET title = ?, activity_date = ?, start_time = ?, end_time = ?, location = ?, notes = ?, status = ?
+           WHERE id = ? AND user_id = ?', 'sssssssii', array_merge($vals, [$id, $userId]));
+    exec1('DELETE FROM pl_activity_participants WHERE activity_id = ?', 'i', [$id]);
+  } else {
+    $id = exec1('INSERT INTO pl_activities (title, activity_date, start_time, end_time, location, notes, status, user_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)', 'sssssssi', array_merge($vals, [$userId]));
+  }
+  foreach ($people as $pid) {
+    exec1('INSERT INTO pl_activity_participants (activity_id, person_id) VALUES (?, ?)', 'ii', [$id, $pid]);
+  }
+  $conn->commit();
+  return $id;
+}
+
+// Marks an activity done and (optionally, once) adds it to each
+// participant's journal -- which also counts as getting in touch.
+function completeActivity(int $userId, int $id, bool $logToJournal): int {
+  $a = ownActivity($userId, $id);
+  $added = 0;
+  $conn = db();
+  $conn->begin_transaction();
+  exec1("UPDATE pl_activities SET status = 'completed' WHERE id = ? AND user_id = ?", 'ii', [$id, $userId]);
+  if ($logToJournal && !$a['journaled']) {
+    $body = trim($a['title'] . ($a['location'] ? ' — ' . $a['location'] : '') . ($a['notes'] ? "\n" . $a['notes'] : ''));
+    foreach (q('SELECT person_id FROM pl_activity_participants WHERE activity_id = ?', 'i', [$id]) as $r) {
+      exec1("INSERT INTO pl_journal_entries (user_id, person_id, entry_date, kind, body, activity_id) VALUES (?, ?, ?, 'activity', ?, ?)",
+            'iissi', [$userId, (int)$r['person_id'], $a['activity_date'], $body, $id]);
+      $added++;
+    }
+    exec1('UPDATE pl_activities SET journaled = 1 WHERE id = ?', 'i', [$id]);
+  }
+  $conn->commit();
+  return $added;
+}
+
 // ---- Router ----
 
 $method = $_SERVER['REQUEST_METHOD'];
@@ -990,7 +1322,14 @@ switch ($action) {
     $uid = member();
     $id = (int)($_GET['id'] ?? 0);
     ownPerson($uid, $id);
-    respond(['Person' => loadPeople($uid, [$id], true)[0], 'Groups' => loadGroups($uid)]);
+    respond([
+      'Person' => loadPeople($uid, [$id], true)[0],
+      'Groups' => loadGroups($uid),
+      'Journal' => loadJournal($uid, $id, null, 500),
+      'Relationships' => loadRelationships($uid, $id),
+      'Households' => loadHouseholds($uid),
+      'Activities' => loadActivities($uid, $id),
+    ]);
   }
 
   case 'savePerson': {
@@ -1165,6 +1504,125 @@ switch ($action) {
     exec1("UPDATE pl_share_invitations SET status = 'cancelled', responded_at = NOW() WHERE id = ?", 'i', [(int)$rows[0]['id']]);
     dropSharePhotos($rows[0]);
     respond(['ok' => true]);
+  }
+
+  // ---- Milestone C ----
+
+  // { id, intervalDays (null = N/A), followUpDate }
+  case 'saveContactPlan': {
+    $uid = member();
+    $p = ownPerson($uid, (int)($body['id'] ?? 0));
+    $days = $body['intervalDays'] ?? null;
+    $days = $days === null || $days === '' ? null : (int)$days;
+    if ($days !== null && ($days < 1 || $days > 3660)) {
+      fail('Pick how often, between 1 day and 10 years');
+    }
+    $follow = dateOrNull($body['followUpDate'] ?? null, 'The follow-up date');
+    exec1('UPDATE pl_people SET contact_interval_days = ?, follow_up_date = ? WHERE id = ? AND user_id = ?',
+          'isii', [$days, $follow, (int)$p['id'], $uid]);
+    respond(['ok' => true]);
+  }
+
+  // GET ?action=journal[&before=YYYY-MM-DD] -- everyone's entries, newest first.
+  case 'journal': {
+    $uid = member();
+    $before = isset($_GET['before']) ? dateOrNull($_GET['before'], 'before') : null;
+    respond(['Entries' => loadJournal($uid, null, $before, 300)]);
+  }
+
+  case 'saveJournalEntry': {
+    $uid = member();
+    respond(['ok' => true, 'Id' => saveJournalEntry($uid, $body)]);
+  }
+
+  case 'deleteJournalEntry': {
+    $uid = member();
+    deleteJournalEntry($uid, (int)($body['id'] ?? 0));
+    respond(['ok' => true]);
+  }
+
+  // multipart: action, entryId, full, thumb
+  case 'addJournalPhoto': {
+    $uid = member();
+    respond(['ok' => true] + addJournalPhoto($uid, (int)($body['entryId'] ?? 0)));
+  }
+
+  case 'removeJournalPhoto': {
+    $uid = member();
+    $rows = q('SELECT ph.* FROM pl_journal_photos ph JOIN pl_journal_entries e ON e.id = ph.entry_id WHERE ph.id = ? AND e.user_id = ?',
+              'ii', [(int)($body['id'] ?? 0), $uid]);
+    if (!$rows) {
+      fail('Photo not found', 404);
+    }
+    exec1('DELETE FROM pl_journal_photos WHERE id = ?', 'i', [(int)$rows[0]['id']]);
+    deletePhotoFiles($rows[0]['photo_key']);
+    respond(['ok' => true]);
+  }
+
+  case 'saveRelationship': {
+    $uid = member();
+    respond(['ok' => true, 'Id' => saveRelationship($uid, $body)]);
+  }
+
+  case 'deleteRelationship': {
+    $uid = member();
+    $n = execCount('DELETE FROM pl_relationships WHERE id = ? AND user_id = ?', 'ii', [(int)($body['id'] ?? 0), $uid]);
+    if (!$n) {
+      fail('Relationship not found', 404);
+    }
+    respond(['ok' => true]);
+  }
+
+  case 'households': {
+    $uid = member();
+    respond(['Households' => loadHouseholds($uid), 'People' => loadPeople($uid)]);
+  }
+
+  case 'saveHousehold': {
+    $uid = member();
+    respond(['ok' => true, 'Id' => saveHousehold($uid, $body)]);
+  }
+
+  // { personId, householdId (0 = leave) }
+  case 'setHousehold': {
+    $uid = member();
+    $p = ownPerson($uid, (int)($body['personId'] ?? 0));
+    $hid = (int)($body['householdId'] ?? 0);
+    if ($hid) {
+      ownHousehold($uid, $hid);
+    }
+    exec1('UPDATE pl_people SET household_id = ? WHERE id = ? AND user_id = ?', 'iii', [$hid ?: null, (int)$p['id'], $uid]);
+    respond(['ok' => true]);
+  }
+
+  case 'deleteHousehold': {
+    $uid = member();
+    $h = ownHousehold($uid, (int)($body['id'] ?? 0));
+    exec1('DELETE FROM pl_households WHERE id = ? AND user_id = ?', 'ii', [(int)$h['id'], $uid]);
+    respond(['ok' => true]);
+  }
+
+  case 'activities': {
+    $uid = member();
+    respond(['Activities' => loadActivities($uid), 'People' => loadPeople($uid), 'Groups' => loadGroups($uid)]);
+  }
+
+  case 'saveActivity': {
+    $uid = member();
+    respond(['ok' => true, 'Id' => saveActivity($uid, $body)]);
+  }
+
+  case 'deleteActivity': {
+    $uid = member();
+    $a = ownActivity($uid, (int)($body['id'] ?? 0));
+    exec1('DELETE FROM pl_activities WHERE id = ? AND user_id = ?', 'ii', [(int)$a['id'], $uid]);
+    respond(['ok' => true]);
+  }
+
+  // { id, logToJournal }
+  case 'completeActivity': {
+    $uid = member();
+    respond(['ok' => true, 'JournalEntries' => completeActivity($uid, (int)($body['id'] ?? 0), !empty($body['logToJournal']))]);
   }
 
   case 'login': {

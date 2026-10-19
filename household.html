@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Household · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=3">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<dialog id="add-dlg" aria-labelledby="ad-title"></dialog>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+<script src="js/dialogs.js?v=3"></script>
+<script>
+renderNav('people.html');
+const contentEl = document.getElementById('content');
+const hid = Number(qsParam('id'));
+let H = null;
+let PEOPLE = [];
+let editing = false;
+
+function members() {
+  return PEOPLE.filter(p => p.HouseholdId === hid).sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
+}
+
+function render() {
+  document.title = `${H.Name} · PeopleLink`;
+  const list = members();
+  const addr = addressLines(H);
+  contentEl.innerHTML = `
+    <p class="small"><a href="people.html">← People</a></p>
+    ${editing ? `
+    <form class="card" id="form" novalidate>
+      <h1 class="page-title" style="margin:0">Edit household</h1>
+      <label for="h-name">Name</label><input type="text" id="h-name" maxlength="100" value="${escapeHtml(H.Name)}">
+      <label for="h-street">Street</label><textarea id="h-street" rows="2" style="min-height:3rem">${escapeHtml(H.Street || '')}</textarea>
+      <div class="row3">
+        <div><label for="h-city">City</label><input type="text" id="h-city" value="${escapeHtml(H.City || '')}"></div>
+        <div><label for="h-region">State / region</label><input type="text" id="h-region" value="${escapeHtml(H.Region || '')}"></div>
+        <div><label for="h-postal">Postal code</label><input type="text" id="h-postal" value="${escapeHtml(H.PostalCode || '')}"></div>
+      </div>
+      <div class="row2">
+        <div><label for="h-country">Country</label><input type="text" id="h-country" value="${escapeHtml(H.Country || '')}"></div>
+        <div><label for="h-phone">Home phone</label><input type="tel" id="h-phone" value="${escapeHtml(H.Phone || '')}"></div>
+      </div>
+      <div id="err"></div>
+      <div class="btn-row" style="margin-top:1rem;justify-content:flex-end">
+        <button type="button" class="btn secondary" id="cancel">Cancel</button><button type="submit" class="btn">Save</button></div>
+    </form>` : `
+    <div class="card">
+      <h1 class="page-title" style="margin:0">🏡 ${escapeHtml(H.Name)}</h1>
+      ${addr.length ? `<p class="notes-text" style="margin:0.4rem 0">${escapeHtml(addr.join('\n'))}</p>` : '<p class="muted small">No address yet.</p>'}
+      ${H.Phone ? `<p style="margin:0.3rem 0">📞 ${escapeHtml(H.Phone)}</p>` : ''}
+      <div class="btn-row" style="margin-top:0.6rem">
+        <button type="button" class="btn secondary" id="edit">✏️ Edit</button>
+        ${addr.length ? '<button type="button" class="btn secondary" id="map">🗺️ Map</button>' : ''}
+        ${H.Phone ? `<a class="btn secondary" href="tel:${escapeHtml(dialable(H.Phone))}">📞 Call</a>` : ''}
+        ${list.length ? '<button type="button" class="btn secondary" id="msg">✉️ Message</button>' : ''}
+      </div>
+    </div>`}
+    <div class="card">
+      <div class="card-head"><h2>Who lives here</h2><button type="button" class="btn small" id="add">+ Add</button></div>
+      <p class="muted small">Everyone keeps their own phones, emails and addresses — the household just ties them to one home.</p>
+      <ul class="person-list">${list.length ? list.map(p => `<li class="person-row">
+        <a class="who" href="person.html?id=${p.Id}">${avatarHtml(p, 'sm')}<span class="txt"><div class="name">${escapeHtml(displayName(p))}</div></span></a>
+        <button type="button" class="icon-btn" data-rm="${p.Id}" aria-label="Remove ${escapeHtml(displayName(p))} from household" title="Remove">✕</button></li>`).join('')
+        : '<li class="person-row"><span class="empty">No one yet.</span></li>'}</ul>
+    </div>
+    <p><button type="button" class="btn danger small" id="del">Delete household</button></p>`;
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+  on('edit', () => { editing = true; render(); });
+  on('cancel', () => { editing = false; render(); });
+  on('map', () => MdwPrefs.navigate(addressOneLine(H)));
+  on('msg', () => openMessage(list, H.Name));
+  on('add', addMembers);
+  on('del', removeHousehold);
+  contentEl.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => setMember(Number(b.dataset.rm), 0)));
+  const form = document.getElementById('form');
+  if (form) form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const v = id => document.getElementById(id).value;
+    try {
+      await postAction('saveHousehold', { id: hid, name: v('h-name'), street: v('h-street'), city: v('h-city'), region: v('h-region'),
+        postalCode: v('h-postal'), country: v('h-country'), phone: v('h-phone') });
+      editing = false;
+      showStatus('Saved.');
+      load();
+    } catch (ex) {
+      document.getElementById('err').innerHTML = `<p class="err">${escapeHtml(errorText(ex, "Couldn't save."))}</p>`;
+    }
+  });
+}
+
+async function setMember(pid, householdId) {
+  try {
+    await postAction('setHousehold', { personId: pid, householdId });
+    load();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't change that."), true);
+  }
+}
+
+function addMembers() {
+  const dlg = document.getElementById('add-dlg');
+  const list = PEOPLE.filter(p => p.HouseholdId !== hid && p.Status !== 'archived').sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
+  dlg.innerHTML = `<div class="dlg"><h2 id="ad-title">Add to ${escapeHtml(H.Name)}</h2>
+    <input type="search" id="ad-q" placeholder="Search…" aria-label="Search people">
+    <div class="pick-list" id="ad-list">${list.map(p => `<label data-name="${escapeHtml((fullName(p) + ' ' + (p.Nickname || '')).toLowerCase())}"><input type="checkbox" value="${p.Id}"> ${avatarHtml(p, 'sm')} ${escapeHtml(displayName(p))}${p.HouseholdId ? ' <span class="muted small">(moves from another household)</span>' : ''}</label>`).join('')}</div>
+    <div class="dlg-actions"><button type="button" class="btn secondary" id="ad-cancel">Cancel</button><button type="button" class="btn" id="ad-save">Add</button></div></div>`;
+  const q = dlg.querySelector('#ad-q');
+  q.addEventListener('input', () => {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    dlg.querySelectorAll('#ad-list label').forEach(l => { l.hidden = !words.every(w => l.dataset.name.includes(w)); });
+  });
+  dlg.querySelector('#ad-cancel').addEventListener('click', () => dlg.close());
+  dlg.querySelector('#ad-save').addEventListener('click', async () => {
+    const ids = [...dlg.querySelectorAll('#ad-list input:checked')].map(i => Number(i.value));
+    dlg.close();
+    for (const id of ids) await postAction('setHousehold', { personId: id, householdId: hid });
+    load();
+  });
+  dlg.showModal();
+  q.focus();
+}
+
+async function removeHousehold() {
+  if (!confirm(`Delete "${H.Name}"? The people stay — they just won't be in a household.`)) return;
+  try {
+    await postAction('deleteHousehold', { id: hid });
+    window.location.href = 'people.html';
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't delete it."), true);
+  }
+}
+
+async function load() {
+  try {
+    const data = await fetchData('households');
+    PEOPLE = data.People;
+    H = data.Households.find(h => h.Id === hid);
+    if (!H) { contentEl.innerHTML = '<p class="note">That household isn\'t in your list. <a href="people.html">Back to People</a></p>'; return; }
+    render();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+}
+load();
+</script>
+</body>
+</html>

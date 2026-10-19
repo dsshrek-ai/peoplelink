@@ -8,20 +8,30 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>Person · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page narrow" id="content">Loading&hellip;</main>
 <dialog id="groups-dlg" aria-labelledby="gd-title"></dialog>
-<script src="js/mdw-prefs.js?v=2"></script>
-<script src="js/app.js?v=2"></script>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+<script src="js/dialogs.js?v=3"></script>
 <script>
 renderNav('people.html');
 const contentEl = document.getElementById('content');
 const personId = Number(qsParam('id'));
+const TABS = ['info', 'journal', 'relationships', 'activities'];
+let tab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'info';
 let P = null;
 let GROUPS = [];
+let PEOPLE = [];        // everyone (names for relationships / households)
+let JOURNAL = [];
+let RELS = [];
+let HOUSEHOLDS = [];
+let ACTIVITIES = [];
+
+const personById = id => PEOPLE.find(x => x.Id === id);
 
 function row(label, valueHtml, actsHtml) {
   return `<div class="info-row"><span class="lbl">${escapeHtml(label)}</span><span class="val">${valueHtml}</span>${actsHtml ? `<span class="acts">${actsHtml}</span>` : ''}</div>`;
@@ -34,7 +44,49 @@ function render() {
   const aka = [];
   if (p.Nickname && p.FirstName && p.Nickname !== p.FirstName) aka.push(fullName(p));
   else if (p.MiddleName) aka.push(fullName(p));
+  const counts = { journal: JOURNAL.length, relationships: RELS.length, activities: ACTIVITIES.length };
 
+  contentEl.innerHTML = `
+    <p class="small"><a href="people.html">← People</a></p>
+    <div class="card">
+      <div class="profile-head">
+        ${avatarHtml(p, 'lg')}
+        <div class="who">
+          <h1>${escapeHtml(displayName(p))} <button type="button" class="icon-btn${p.Pinned ? ' on' : ''}" id="pin-btn" aria-pressed="${p.Pinned}" title="${p.Pinned ? 'Unpin' : 'Pin to Dashboard'}">${p.Pinned ? '★' : '☆'}</button></h1>
+          ${aka.length ? `<div class="aka">${escapeHtml(aka.join(' · '))}</div>` : ''}
+          ${job ? `<div>${escapeHtml(job)}</div>` : ''}
+          ${p.Occupation ? `<div class="muted">${escapeHtml(p.Occupation)}</div>` : ''}
+          ${p.Status !== 'active' ? `<span class="badge ${p.Status}">${p.Status}</span>` : ''}
+          ${p.LastContact ? `<div class="small muted">Last contact ${escapeHtml(agoText(p.LastContact))}</div>` : ''}
+        </div>
+      </div>
+      <div class="btn-row profile-actions">
+        <button type="button" class="btn" id="log-btn">📝 Log contact</button>
+        <a class="btn secondary" href="edit.html?id=${p.Id}">✏️ Edit</a>
+        ${p.Phones[0] ? `<a class="btn secondary" href="tel:${escapeHtml(dialable(p.Phones[0].Value))}">📞 Call</a>
+          <a class="btn secondary" href="sms:${escapeHtml(dialable(p.Phones[0].Value))}">💬 Text</a>` : ''}
+        ${p.Emails[0] ? `<a class="btn secondary" href="mailto:${escapeHtml(p.Emails[0].Value)}">✉️ Email</a>` : ''}
+      </div>
+    </div>
+    <div class="tabs" role="tablist">
+      ${TABS.map(t => `<button type="button" role="tab" data-tab="${t}" aria-selected="${t === tab}">${{ info: 'Info', journal: 'Journal', relationships: 'Family', activities: 'Activities' }[t]}${counts[t] ? ` <span class="count">${counts[t]}</span>` : ''}</button>`).join('')}
+    </div>
+    <div id="tab-body"></div>`;
+
+  contentEl.querySelector('#pin-btn').addEventListener('click', togglePin);
+  contentEl.querySelector('#log-btn').addEventListener('click', () => openLogContact(P, { onSaved: reload }));
+  contentEl.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
+    tab = b.dataset.tab;
+    history.replaceState({}, '', `person.html?id=${P.Id}#${tab}`);
+    render();
+  }));
+  ({ info: renderInfo, journal: renderJournal, relationships: renderRelationships, activities: renderActivities })[tab]();
+}
+
+// ---- Info ----
+function renderInfo() {
+  const p = P;
+  const body = document.getElementById('tab-body');
   const phones = p.Phones.map(x => {
     const n = escapeHtml(dialable(x.Value));
     return row(labelText(x.Label) || 'Phone', escapeHtml(x.Value),
@@ -56,33 +108,50 @@ function render() {
     dates.push(row('Anniv.', escapeHtml(fmtPartialDate(p.Anniversary)),
       p.Status === 'active' ? `<button type="button" class="btn small secondary" data-cal="Anniversary">📅 Calendar</button>` : ''));
   }
-
   const myGroups = GROUPS.filter(g => p.GroupIds.includes(g.Id));
+  const hh = HOUSEHOLDS.find(h => h.Id === p.HouseholdId);
+  const st = contactStatus(p);
 
-  contentEl.innerHTML = `
-    <p class="small"><a href="people.html">← People</a></p>
+  body.innerHTML = `
     <div class="card">
-      <div class="profile-head">
-        ${avatarHtml(p, 'lg')}
-        <div class="who">
-          <h1>${escapeHtml(displayName(p))} <button type="button" class="icon-btn${p.Pinned ? ' on' : ''}" id="pin-btn" aria-pressed="${p.Pinned}" title="${p.Pinned ? 'Unpin' : 'Pin to Dashboard'}">${p.Pinned ? '★' : '☆'}</button></h1>
-          ${aka.length ? `<div class="aka">${escapeHtml(aka.join(' · '))}</div>` : ''}
-          ${job ? `<div>${escapeHtml(job)}</div>` : ''}
-          ${p.Occupation ? `<div class="muted">${escapeHtml(p.Occupation)}</div>` : ''}
-          ${p.Status !== 'active' ? `<span class="badge ${p.Status}">${p.Status}</span>` : ''}
-        </div>
+      <h2>⏰ Stay in touch</h2>
+      <div class="row2">
+        <div><label for="ci-int">Get in touch</label>
+          <select id="ci-int"><option value="">N/A — no reminders</option>
+            ${INTERVALS.map(i => `<option value="${i.days}" ${p.ContactIntervalDays === i.days ? 'selected' : ''}>${i.label}</option>`).join('')}
+            <option value="custom" ${p.ContactIntervalDays && !INTERVALS.some(i => i.days === p.ContactIntervalDays) ? 'selected' : ''}>Custom…</option>
+          </select></div>
+        <div id="ci-custom-wrap" ${p.ContactIntervalDays && !INTERVALS.some(i => i.days === p.ContactIntervalDays) ? '' : 'hidden'}><label for="ci-days">Every how many days?</label>
+          <input type="number" id="ci-days" min="1" max="3660" value="${p.ContactIntervalDays || ''}"></div>
       </div>
-      <div class="btn-row profile-actions">
-        <a class="btn" href="edit.html?id=${p.Id}">✏️ Edit</a>
-        ${p.Phones[0] ? `<a class="btn secondary" href="tel:${escapeHtml(dialable(p.Phones[0].Value))}">📞 Call</a>
-          <a class="btn secondary" href="sms:${escapeHtml(dialable(p.Phones[0].Value))}">💬 Text</a>` : ''}
-        ${p.Emails[0] ? `<a class="btn secondary" href="mailto:${escapeHtml(p.Emails[0].Value)}">✉️ Email</a>` : ''}
+      <div class="row2">
+        <div><label for="ci-follow">Follow up by <span class="muted">(optional)</span></label><input type="date" id="ci-follow" value="${escapeHtml(p.FollowUpDate || '')}"></div>
+        <div style="align-self:end"><button type="button" class="btn secondary" id="ci-save">Save</button></div>
       </div>
+      <p class="small" style="margin:0.6rem 0 0">
+        ${p.LastContact ? `Last contact: <strong>${escapeHtml(fmtYmd(p.LastContact))}</strong> (${escapeHtml(agoText(p.LastContact))}).` : 'No contact logged yet.'}
+        ${st ? ` <span class="due ${st}">${escapeHtml(dueText(p))}</span>` : ''}
+      </p>
     </div>
 
     <div class="card">
       <h2>Contact info</h2>
       ${phones || emails || addrs ? phones + emails + addrs : '<p class="empty">No phone, email or address yet. <a href="edit.html?id=' + p.Id + '">Add some</a>.</p>'}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>🏡 Household</h2>${hh ? `<a class="btn small secondary" href="household.html?id=${hh.Id}">Open</a>` : ''}</div>
+      ${hh ? `
+        <p style="margin:0"><strong>${escapeHtml(hh.Name)}</strong></p>
+        ${addressLines(hh).length ? `<p class="notes-text" style="margin:0.2rem 0">${escapeHtml(addressLines(hh).join('\n'))} <button type="button" class="btn small secondary" id="hh-map">🗺️ Map</button></p>` : ''}
+        ${hh.Phone ? `<p style="margin:0.2rem 0">${escapeHtml(hh.Phone)} <a class="btn small secondary" href="tel:${escapeHtml(dialable(hh.Phone))}">📞 Call</a></p>` : ''}
+        <div class="chips" style="margin-top:0.4rem">${hh.MemberIds.filter(id => id !== p.Id).map(id => personById(id)).filter(Boolean).map(m => `<a class="chip" href="person.html?id=${m.Id}">${escapeHtml(displayName(m))}</a>`).join('') || '<span class="muted small">No one else yet.</span>'}</div>
+        <p style="margin:0.6rem 0 0"><button type="button" class="btn small secondary" id="hh-leave">Remove from household</button></p>`
+      : `<p class="muted small">Group people who live together, with one shared address.</p>
+        <div class="btn-row">
+          ${HOUSEHOLDS.length ? `<select id="hh-pick" style="width:auto"><option value="">Join a household…</option>${HOUSEHOLDS.map(h => `<option value="${h.Id}">${escapeHtml(h.Name)}</option>`).join('')}</select>` : ''}
+          <button type="button" class="btn small secondary" id="hh-new">+ New household</button>
+        </div>`}
     </div>
 
     ${dates.length ? `<div class="card"><h2>Dates</h2>${dates.join('')}</div>` : ''}
@@ -99,7 +168,7 @@ function render() {
 
     <div class="card">
       <h2>Status</h2>
-      <p class="muted small">Archived people are hidden from lists and the Dashboard but kept. Deceased people stay in your records without birthday reminders.</p>
+      <p class="muted small">Archived people are hidden from lists and the Dashboard but kept. Deceased people stay in your records without reminders.</p>
       <div class="btn-row">
         ${p.Status !== 'active' ? '<button type="button" class="btn secondary" data-status="active">Make active</button>' : ''}
         ${p.Status !== 'archived' ? '<button type="button" class="btn secondary" data-status="archived">Archive</button>' : ''}
@@ -108,32 +177,161 @@ function render() {
       </div>
     </div>`;
 
-  document.getElementById('pin-btn').addEventListener('click', togglePin);
-  document.getElementById('groups-btn').addEventListener('click', openGroups);
-  document.getElementById('delete-btn').addEventListener('click', removePerson);
-  contentEl.querySelectorAll('[data-status]').forEach(b => b.addEventListener('click', () => setStatus(b.dataset.status)));
-  contentEl.querySelectorAll('[data-map]').forEach(b => b.addEventListener('click', () => {
-    MdwPrefs.navigate(addressOneLine(p.Addresses[Number(b.dataset.map)]));
-  }));
-  contentEl.querySelectorAll('[data-cal]').forEach(b => b.addEventListener('click', () => addDateToCalendar(b.dataset.cal)));
+  const intSel = body.querySelector('#ci-int');
+  intSel.addEventListener('change', () => { body.querySelector('#ci-custom-wrap').hidden = intSel.value !== 'custom'; });
+  body.querySelector('#ci-save').addEventListener('click', saveContactPlan);
+  body.querySelector('#groups-btn').addEventListener('click', openGroups);
+  body.querySelector('#delete-btn').addEventListener('click', removePerson);
+  body.querySelectorAll('[data-status]').forEach(b => b.addEventListener('click', () => setStatus(b.dataset.status)));
+  body.querySelectorAll('[data-map]').forEach(b => b.addEventListener('click', () => MdwPrefs.navigate(addressOneLine(p.Addresses[Number(b.dataset.map)]))));
+  body.querySelectorAll('[data-cal]').forEach(b => b.addEventListener('click', () => addDateToCalendar(b.dataset.cal)));
+  const hm = body.querySelector('#hh-map');
+  if (hm) hm.addEventListener('click', () => MdwPrefs.navigate(addressOneLine(hh)));
+  const hl = body.querySelector('#hh-leave');
+  if (hl) hl.addEventListener('click', () => setHousehold(0));
+  const hp = body.querySelector('#hh-pick');
+  if (hp) hp.addEventListener('change', () => { if (hp.value) setHousehold(Number(hp.value)); });
+  const hn = body.querySelector('#hh-new');
+  if (hn) hn.addEventListener('click', newHousehold);
 }
+
+async function saveContactPlan() {
+  const sel = document.getElementById('ci-int').value;
+  const days = sel === 'custom' ? Number(document.getElementById('ci-days').value) : (sel ? Number(sel) : null);
+  if (sel === 'custom' && !(days >= 1)) { showStatus('Enter how many days.', true); return; }
+  try {
+    await postAction('saveContactPlan', { id: P.Id, intervalDays: days, followUpDate: document.getElementById('ci-follow').value });
+    showStatus('Saved.');
+    reload();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't save."), true);
+  }
+}
+
+async function setHousehold(hid) {
+  try {
+    await postAction('setHousehold', { personId: P.Id, householdId: hid });
+    showStatus(hid ? 'Added to the household.' : 'Removed from the household.');
+    reload();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't change that."), true);
+  }
+}
+
+async function newHousehold() {
+  const name = prompt('Household name:', P.LastName ? `The ${P.LastName}s` : `${displayName(P)}'s home`);
+  if (!name || !name.trim()) return;
+  // Start from this person's first address; it can be edited on the household page.
+  const a = P.Addresses[0] || {};
+  try {
+    const res = await postAction('saveHousehold', {
+      name: name.trim(), street: a.Street, city: a.City, region: a.Region, postalCode: a.PostalCode, country: a.Country,
+      addPersonId: P.Id,
+    });
+    window.location.href = `household.html?id=${res.Id}`;
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't create the household."), true);
+  }
+}
+
+// ---- Journal ----
+function entryHtml(e) {
+  const k = kindInfo(e.Kind);
+  return `<li class="jentry">
+    <div class="jhead"><span class="jkind" aria-hidden="true">${k.icon}</span>
+      <strong>${escapeHtml(k.label)}</strong> <span class="muted small">${escapeHtml(fmtYmd(e.Date, true))}</span>
+      <button type="button" class="btn small secondary jedit" data-edit="${e.Id}">Edit</button></div>
+    ${e.Body ? `<div class="notes-text">${escapeHtml(e.Body)}</div>` : ''}
+    ${e.Photos.length ? `<div class="jphotos">${e.Photos.map(ph => `<a class="jphoto" href="${escapeHtml(photoUrl(ph.Key, false))}" target="_blank"><img src="${escapeHtml(photoUrl(ph.Key, true))}" alt="Photo"></a>`).join('')}</div>` : ''}
+    ${e.FollowUpDate ? `<div class="small muted">↪ Follow up by ${escapeHtml(fmtYmd(e.FollowUpDate, true))}</div>` : ''}
+    ${e.ActivityId ? `<div class="small"><a href="activity.html?id=${e.ActivityId}">From an activity →</a></div>` : ''}
+  </li>`;
+}
+
+function renderJournal() {
+  const body = document.getElementById('tab-body');
+  body.innerHTML = `<div class="card">
+    <div class="card-head"><h2>📝 Journal</h2><button type="button" class="btn small" id="jl-add">+ Log contact</button></div>
+    <p class="muted small">Your private record of calls, visits and conversations. Logging a contact also resets this person's reminder.</p>
+    ${JOURNAL.length ? `<ul class="jlist">${JOURNAL.map(entryHtml).join('')}</ul>` : '<p class="empty">Nothing logged yet.</p>'}
+  </div>`;
+  body.querySelector('#jl-add').addEventListener('click', () => openLogContact(P, { onSaved: reload }));
+  body.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () =>
+    openLogContact(P, { entry: JOURNAL.find(e => e.Id === Number(b.dataset.edit)), onSaved: reload })));
+}
+
+// ---- Relationships ----
+function renderRelationships() {
+  const body = document.getElementById('tab-body');
+  const linked = new Set(RELS.map(r => r.PersonId));
+  const others = PEOPLE.filter(x => x.Id !== P.Id && !linked.has(x.Id) && x.Status !== 'archived')
+    .sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
+  body.innerHTML = `<div class="card">
+    <h2>👪 Family & friends</h2>
+    ${RELS.length ? `<ul class="person-list" style="margin-bottom:0.8rem">${RELS.map(r => {
+      const o = personById(r.PersonId);
+      if (!o) return '';
+      return `<li class="person-row"><a class="who" href="person.html?id=${o.Id}">${avatarHtml(o, 'sm')}<span class="txt"><div class="name">${escapeHtml(displayName(o))}</div><div class="sub">${escapeHtml(relLabel(r))}</div></span></a>
+        <button type="button" class="icon-btn" data-unlink="${r.Id}" aria-label="Remove link to ${escapeHtml(displayName(o))}" title="Remove link">✕</button></li>`;
+    }).join('')}</ul>` : '<p class="empty">No one linked yet.</p>'}
+    <h3>Add a link</h3>
+    ${others.length ? `
+      <div class="rel-add">
+        <select id="rl-person" aria-label="Person"><option value="">Choose a person…</option>${others.map(o => `<option value="${o.Id}">${escapeHtml(displayName(o))}</option>`).join('')}</select>
+        <span class="muted">is ${escapeHtml(displayName(P))}'s</span>
+        <select id="rl-kind" aria-label="Relationship">${RELATIONSHIP_KINDS.map(k => `<option value="${k[0]}">${k[1].toLowerCase()}</option>`).join('')}</select>
+        <input type="text" id="rl-label" placeholder="e.g. cousin" maxlength="60" hidden aria-label="Describe the relationship">
+        <button type="button" class="btn small" id="rl-add">Add</button>
+      </div>
+      <p class="muted small">The link shows on both people's pages — "parent" here appears as "child" on theirs.</p>`
+      : '<p class="empty">Add more people first, then link them here.</p>'}
+  </div>`;
+  body.querySelectorAll('[data-unlink]').forEach(b => b.addEventListener('click', async () => {
+    try {
+      await postAction('deleteRelationship', { id: Number(b.dataset.unlink) });
+      reload();
+    } catch (e) {
+      showStatus(errorText(e, "Couldn't remove it."), true);
+    }
+  }));
+  const kind = body.querySelector('#rl-kind');
+  if (!kind) return;
+  kind.addEventListener('change', () => { body.querySelector('#rl-label').hidden = kind.value !== 'other'; });
+  body.querySelector('#rl-add').addEventListener('click', async () => {
+    const rid = Number(body.querySelector('#rl-person').value);
+    if (!rid) { showStatus('Choose a person.', true); return; }
+    try {
+      await postAction('saveRelationship', { personId: P.Id, relatedId: rid, kind: kind.value, label: body.querySelector('#rl-label').value });
+      showStatus('Linked.');
+      reload();
+    } catch (e) {
+      showStatus(errorText(e, "Couldn't add the link."), true);
+    }
+  });
+}
+
+// ---- Activities ----
+function renderActivities() {
+  const body = document.getElementById('tab-body');
+  body.innerHTML = `<div class="card">
+    <div class="card-head"><h2>📅 Activities</h2><a class="btn small" href="activity.html?person=${P.Id}">+ Plan one</a></div>
+    ${ACTIVITIES.length ? `<ul class="date-list">${ACTIVITIES.map(a => `<li>
+      <a href="activity.html?id=${a.Id}"><strong>${escapeHtml(a.Title)}</strong>
+        <div class="small muted">${escapeHtml(fmtYmd(a.Date, true))}${a.StartTime ? ' · ' + escapeHtml(fmtTime(a.StartTime)) : ''}${a.Location ? ' · ' + escapeHtml(a.Location) : ''}</div></a>
+      <span class="badge ${a.Status}">${a.Status}</span></li>`).join('')}</ul>` : '<p class="empty">No activities with them yet.</p>'}
+  </div>`;
+}
+
+// ---- actions kept from Milestone A ----
 
 // An all-day event on the next occurrence; the calendar app can repeat it.
 function addDateToCalendar(field) {
   const t = todayParts();
   const next = new Date(t.Year, t.Month - 1, t.Day + daysUntil(P[field]));
-  const year = next.getFullYear();
-  const pad = n => String(n).padStart(2, '0');
   const title = field === 'Birthday' ? `${displayName(P)}'s birthday` : `${displayName(P)}'s anniversary`;
   MdwPrefs.addToCalendar({
-    uid: `peoplelink-${P.Id}-${field.toLowerCase()}-${year}@peoplelink`,
-    title,
-    date: `${year}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`,
-    startTime: null,
-    endTime: null,
-    notes: '',
-    location: '',
-    reminderMinutes: null,
+    uid: `peoplelink-${P.Id}-${field.toLowerCase()}-${next.getFullYear()}@peoplelink`,
+    title, date: ymdOf(next), startTime: null, endTime: null, notes: '', location: '', reminderMinutes: null,
   });
 }
 
@@ -160,7 +358,7 @@ async function setStatus(status) {
 }
 
 async function removePerson() {
-  if (!confirm(`Delete ${displayName(P)} permanently? Their phones, emails, addresses, notes and photo go too. (Archive instead if you might want them back.)`)) return;
+  if (!confirm(`Delete ${displayName(P)} permanently? Their phones, emails, addresses, notes, journal and photos go too. (Archive instead if you might want them back.)`)) return;
   try {
     await postAction('deletePeople', { ids: [P.Id] });
     window.location.href = 'people.html';
@@ -200,13 +398,22 @@ function openGroups() {
   dlg.showModal();
 }
 
+async function reload() {
+  const [data, everyone] = await Promise.all([fetchData('person', { id: personId }), fetchData('people')]);
+  P = data.Person;
+  GROUPS = data.Groups;
+  JOURNAL = data.Journal;
+  RELS = data.Relationships;
+  HOUSEHOLDS = data.Households;
+  ACTIVITIES = data.Activities;
+  PEOPLE = everyone.People;
+  render();
+}
+
 (async () => {
   if (!personId) { contentEl.innerHTML = '<p class="note">No person chosen. <a href="people.html">Back to People</a></p>'; return; }
   try {
-    const data = await fetchData('person', { id: personId });
-    P = data.Person;
-    GROUPS = data.Groups;
-    render();
+    await reload();
   } catch (e) {
     if (e.status === 404) contentEl.innerHTML = '<p class="note">That person isn\'t in your list. <a href="people.html">Back to People</a></p>';
     else handleError(contentEl, e);

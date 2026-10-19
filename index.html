@@ -8,13 +8,14 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page" id="content">Loading&hellip;</main>
-<script src="js/mdw-prefs.js?v=2"></script>
-<script src="js/app.js?v=2"></script>
+<script src="js/mdw-prefs.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
+<script src="js/dialogs.js?v=3"></script>
 <script>
 renderNav('index.html');
 const contentEl = document.getElementById('content');
@@ -47,12 +48,18 @@ function dateLine(e) {
 
 async function load() {
   try {
-    const [boot, data] = await Promise.all([fetchData('bootstrap'), fetchData('people')]);
+    const [boot, data, acts] = await Promise.all([fetchData('bootstrap'), fetchData('people'), fetchData('activities')]);
     const people = data.People;
     const active = people.filter(p => p.Status === 'active');
     const pinned = active.filter(p => p.Pinned).sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
     const dates = upcomingDates(people, 30);
     const groups = data.Groups.filter(g => !g.Archived);
+    const due = active.filter(p => ['overdue', 'soon'].includes(contactStatus(p)))
+      .sort((a, b) => nextContact(a).date.localeCompare(nextContact(b).date));
+    const overdueCount = due.filter(p => contactStatus(p) === 'overdue').length;
+    const today = todayYmd();
+    const soonActs = acts.Activities.filter(a => a.Status === 'planned' && a.Date >= today && a.Date <= addDaysYmd(today, 14));
+    const wrapUp = acts.Activities.filter(a => a.Status === 'planned' && a.Date < today).length;
 
     contentEl.innerHTML = `
       <h1 class="page-title">Hello, ${escapeHtml(boot.DisplayName)}</h1>
@@ -73,6 +80,15 @@ async function load() {
               : '<p class="empty">Tap the ☆ on someone\'s page to keep them here.</p>'}
           </div>
           <div class="card">
+            <div class="card-head"><h2>⏰ Get in touch</h2><a class="small" href="reminders.html">All reminders</a></div>
+            ${due.length ? `${overdueCount ? `<p class="small due overdue" style="margin:0 0 0.3rem">${overdueCount} overdue</p>` : ''}<ul class="date-list">${due.slice(0, 6).map(p => `<li>
+              ${avatarHtml(p, 'sm')}<a href="person.html?id=${p.Id}"><strong>${escapeHtml(displayName(p))}</strong>
+              <div class="small"><span class="due ${contactStatus(p)}">${escapeHtml(dueText(p))}</span></div></a>
+              <button type="button" class="btn small secondary" data-log="${p.Id}">📝 Log</button></li>`).join('')}</ul>
+              ${due.length > 6 ? `<p class="small"><a href="reminders.html">+${due.length - 6} more</a></p>` : ''}`
+              : '<p class="empty">No one is due. Set how often to keep in touch on anyone\'s page.</p>'}
+          </div>
+          <div class="card">
             <div class="card-head"><h2>🎉 Next 30 days</h2></div>
             ${dates.length ? `<ul class="date-list">${dates.map(dateLine).join('')}</ul>`
               : '<p class="empty">No birthdays or anniversaries in the next 30 days.</p>'}
@@ -86,12 +102,21 @@ async function load() {
             <div class="btn-row"><a class="btn secondary" href="people.html">Browse people</a></div>
           </div>
           <div class="card">
+            <div class="card-head"><h2>📅 Coming up</h2><a class="btn small" href="activity.html">+ Plan</a></div>
+            ${soonActs.length ? `<ul class="date-list">${soonActs.map(a => `<li><a href="activity.html?id=${a.Id}"><strong>${escapeHtml(a.Title)}</strong>
+              <div class="small muted">${escapeHtml(fmtYmd(a.Date))}${a.StartTime ? ' · ' + escapeHtml(fmtTime(a.StartTime)) : ''}${a.Location ? ' · ' + escapeHtml(a.Location) : ''}</div></a></li>`).join('')}</ul>`
+              : '<p class="empty">No activities in the next two weeks.</p>'}
+            ${wrapUp ? `<p class="small"><a href="activities.html">${wrapUp} past activit${wrapUp === 1 ? 'y needs' : 'ies need'} wrapping up →</a></p>` : ''}
+          </div>
+          <div class="card">
             <div class="card-head"><h2>Groups</h2><a class="small" href="groups.html">Manage</a></div>
             ${groups.length ? `<div class="chips">${groups.map(g => groupChip({ ...g, Name: `${g.Name} (${g.MemberCount})` }, `group.html?id=${g.Id}`)).join('')}</div>`
               : '<p class="empty">No groups yet. <a href="groups.html">Create one</a> — like Family, Neighbors, or Choir.</p>'}
           </div>
         </div>
       </div>`;
+    contentEl.querySelectorAll('[data-log]').forEach(b => b.addEventListener('click', () =>
+      openLogContact(people.find(p => p.Id === Number(b.dataset.log)), { onSaved: load })));
   } catch (e) {
     handleError(contentEl, e);
   }
