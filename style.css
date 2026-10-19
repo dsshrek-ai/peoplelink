@@ -277,3 +277,38 @@ details summary { cursor: pointer; }
 .more-list li:first-child a { border-top: 0; }
 .more-list a:hover { background: var(--tint); }
 .person-row .sub.wrap { white-space: normal; }
+
+/* ---- Milestone D ---- */
+.report-picker { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0.7rem; }
+.report-picker a { display: flex; gap: 0.7rem; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.8rem 0.9rem; text-decoration: none; color: inherit; height: 100%; }
+.report-picker a:hover { background: var(--tint); }
+.report-picker strong { display: block; }
+.report-picker .ricon { font-size: 1.7rem; }
+.table-wrap { overflow-x: auto; }
+table.report { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+table.report th { text-align: left; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); border-bottom: 2px solid var(--border); padding: 0.4rem 0.5rem; }
+table.report td { border-bottom: 1px solid var(--line); padding: 0.4rem 0.5rem; vertical-align: top; white-space: pre-line; }
+table.report tr:nth-child(even) td { background: #fafcfb; }
+.month-title { margin: 1rem 0 0.3rem; color: var(--primary-dark); }
+.bar { display: inline-block; height: 0.7rem; background: var(--primary); border-radius: 3px; vertical-align: middle; min-width: 2px; max-width: 8rem; }
+.print-title { margin-top: 0; }
+.dup-pairs { list-style: none; margin: 0; padding: 0; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+@media (max-width: 560px) { .pair { grid-template-columns: 1fr; } }
+.pair-who { display: flex; gap: 0.6rem; align-items: center; text-decoration: none; color: inherit; }
+.merge-choice { display: flex; gap: 0.6rem; align-items: center; font-weight: normal; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.7rem; cursor: pointer; }
+.merge-choice input { width: 18px; height: 18px; accent-color: var(--primary); }
+
+@media print {
+  header.site-header, .tab-bar, .no-print, .status { display: none !important; }
+  body { background: #fff; padding: 0; }
+  main.page { max-width: none; padding: 0; }
+  .card { border: 0; padding: 0; }
+  table.report { font-size: 10pt; }
+  table.report tr:nth-child(even) td { background: none; }
+  a { color: inherit; text-decoration: none; }
+  .month-title { break-after: avoid; }
+  tr { break-inside: avoid; }
+}
+.nowrap { white-space: nowrap; }

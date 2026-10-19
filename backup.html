@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Backup · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">
+  <h1 class="page-title">💾 Backup &amp; restore</h1>
+
+  <div class="card">
+    <h2>Download my backup</h2>
+    <p>Saves <strong>everything</strong> in your PeopleLink into one file: people, groups, notes, journal, reminders, family links, households and activities. Keep it somewhere safe, like your computer or a cloud drive.</p>
+    <p class="muted small">Unlike exports, a backup includes your private notes and journal — so keep the file private too.</p>
+    <label class="inline"><input type="checkbox" id="photos"> Include photos <span class="muted small">(bigger file, but needed to get photos back if the server ever loses them)</span></label>
+    <p style="margin-top:0.7rem"><button type="button" class="btn" id="dl">⬇️ Download backup</button> <span id="dl-status" class="small muted"></span></p>
+  </div>
+
+  <div class="card">
+    <h2>Restore from a backup</h2>
+    <p><strong>Restoring replaces everything</strong> in your PeopleLink with what's in the file. Anything added since that backup is lost. Download a fresh backup first if you're not sure.</p>
+    <label class="btn secondary" style="margin-top:0.3rem">📄 Choose backup file<input type="file" id="file" accept=".json,application/json" hidden></label>
+    <div id="preview"></div>
+  </div>
+</main>
+<script src="js/mdw-prefs.js?v=4"></script>
+<script src="js/app.js?v=4"></script>
+<script src="js/transfer.js?v=4"></script>
+<script>
+renderNav('backup.html');
+let BACKUP = null;
+
+document.getElementById('dl').addEventListener('click', async () => {
+  const btn = document.getElementById('dl');
+  const status = document.getElementById('dl-status');
+  btn.disabled = true;
+  status.textContent = 'Preparing…';
+  try {
+    const params = document.getElementById('photos').checked ? { photos: '1' } : {};
+    const data = await fetchData('backup', params);
+    const text = JSON.stringify(data);
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `PeopleLink-backup-${todayYmd()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    const mb = (text.length / 1048576).toFixed(1);
+    status.textContent = `Saved ${data.People.length} people, ${data.Journal.length} journal entries (${mb} MB).`;
+  } catch (e) {
+    status.textContent = '';
+    showStatus(errorText(e, "Couldn't make the backup."), true);
+  }
+  btn.disabled = false;
+});
+
+document.getElementById('file').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  const box = document.getElementById('preview');
+  if (!f) return;
+  try {
+    BACKUP = JSON.parse(await readFileText(f));
+    if (BACKUP.App !== 'PeopleLink' || !Array.isArray(BACKUP.People)) throw new Error('not a backup');
+  } catch (ex) {
+    BACKUP = null;
+    box.innerHTML = '<p class="err">That file isn\'t a PeopleLink backup.</p>';
+    return;
+  }
+  const photos = Object.keys(BACKUP.Photos || {}).length;
+  const when = BACKUP.CreatedAt ? new Date(BACKUP.CreatedAt).toLocaleString() : 'unknown date';
+  box.innerHTML = `<div class="note" style="margin-top:0.8rem">
+    <p style="margin-top:0"><strong>${escapeHtml(f.name)}</strong> — made ${escapeHtml(when)}</p>
+    <ul class="small">
+      <li>${BACKUP.People.length} people, ${(BACKUP.Groups || []).length} groups, ${(BACKUP.Households || []).length} households</li>
+      <li>${(BACKUP.Journal || []).length} journal entries, ${(BACKUP.Activities || []).length} activities, ${(BACKUP.Relationships || []).length} family links</li>
+      <li>${photos ? `${photos} photos included` : 'No photos in the file (photos still on the server will be kept)'}</li>
+    </ul>
+    <label for="confirm">Type <strong>REPLACE</strong> to replace everything in your PeopleLink with this backup</label>
+    <input type="text" id="confirm" autocomplete="off" autocapitalize="characters">
+    <p style="margin-bottom:0"><button type="button" class="btn danger" id="restore" disabled>Restore this backup</button></p>
+  </div>`;
+  const input = document.getElementById('confirm');
+  const btn = document.getElementById('restore');
+  input.addEventListener('input', () => { btn.disabled = input.value.trim() !== 'REPLACE'; });
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Restoring…';
+    try {
+      const res = await postAction('restore', { confirm: 'REPLACE', data: BACKUP });
+      const c = res.Restored;
+      box.innerHTML = `<div class="note" style="margin-top:0.8rem"><strong>✅ Restored.</strong>
+        ${c.People} people, ${c.Groups} groups, ${c.Households} households, ${c.Journal} journal entries, ${c.Activities} activities, ${c.Relationships} family links.
+        <p style="margin-bottom:0"><a class="btn" href="people.html">See People</a></p></div>`;
+    } catch (ex) {
+      box.insertAdjacentHTML('beforeend', `<p class="err">${escapeHtml(errorText(ex, "The restore didn't work. Nothing was changed."))}</p>`);
+      btn.textContent = 'Restore this backup';
+      btn.disabled = false;
+    }
+  });
+});
+</script>
+</body>
+</html>

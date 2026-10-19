@@ -1,7 +1,7 @@
 // PeopleLink shared helpers: config, login, API calls, navigation, and the
 // small formatting functions every page uses.
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 
 const CONFIG = {
   API_URL: 'https://seniorfamily.org/peoplelink-api/api.php',
@@ -74,10 +74,11 @@ const NAV = [
   { href: 'activities.html', label: 'Activities', icon: '📅', tab: true },
   { href: 'journal.html', label: 'Journal', icon: '📝' },
   { href: 'reminders.html', label: 'Reminders', icon: '⏰' },
+  { href: 'reports.html', label: 'Reports', icon: '📊' },
   { href: 'help.html', label: 'Help', icon: '❓' },
   { href: 'about.html', label: 'About', icon: 'ⓘ' },
 ];
-const MORE_PAGES = ['more.html', 'journal.html', 'reminders.html', 'help.html', 'about.html', 'invitations.html'];
+const MORE_PAGES = ['more.html', 'journal.html', 'reminders.html', 'reports.html', 'backup.html', 'help.html', 'about.html', 'invitations.html'];
 
 // Fills <header class="site-header"> and adds the phone-size tab bar.
 function renderNav(current) {

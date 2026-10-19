@@ -8,14 +8,14 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>People · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page" id="content">Loading&hellip;</main>
-<script src="js/mdw-prefs.js?v=3"></script>
-<script src="js/app.js?v=3"></script>
-<script src="js/dialogs.js?v=3"></script>
+<script src="js/mdw-prefs.js?v=4"></script>
+<script src="js/app.js?v=4"></script>
+<script src="js/dialogs.js?v=4"></script>
 <script>
 renderNav('people.html');
 const contentEl = document.getElementById('content');
@@ -131,11 +131,16 @@ function renderShell() {
       <select id="bulk-status" aria-label="Status for selected people">
         <option value="">Set status…</option><option value="active">Active</option><option value="archived">Archived</option><option value="deceased">Deceased</option>
       </select>
+      <select id="bulk-interval" aria-label="Stay in touch for selected people">
+        <option value="">Stay in touch…</option><option value="na">N/A — no reminders</option>
+        ${INTERVALS.map(i => `<option value="${i.days}">${i.label}</option>`).join('')}
+      </select>
       <button type="button" class="btn secondary small" id="bulk-msg">✉️ Message</button>
       <button type="button" class="btn secondary small" id="bulk-export">Export</button>
+      <button type="button" class="btn danger small" id="bulk-delete">Delete</button>
       <button type="button" class="btn secondary small" id="bulk-done">Done</button>
     </div>
-    <div class="list-meta"><span id="count"></span>
+    <div class="list-meta"><span><span id="count"></span> · <a href="duplicates.html">Find duplicates</a></span>
       <label class="inline small" style="margin:0">Sort by
         <select id="f-sort" style="width:auto"><option value="first" ${filters.sort === 'first' ? 'selected' : ''}>First name</option><option value="last" ${filters.sort === 'last' ? 'selected' : ''}>Last name</option></select>
       </label></div>
@@ -151,6 +156,32 @@ function renderShell() {
   on('f-sort', 'change', e => { filters.sort = e.target.value; try { localStorage.setItem(SORT_KEY, filters.sort); } catch (x) {} renderList(); });
   on('select-btn', 'click', () => setSelecting(!selecting));
   on('bulk-done', 'click', () => setSelecting(false));
+  on('bulk-interval', 'change', async e => {
+    const v = e.target.value;
+    e.target.value = '';
+    if (!v) return;
+    if (!selected.size) { showStatus('Select some people first.', true); return; }
+    try {
+      const res = await postAction('setContactInterval', { ids: [...selected], intervalDays: v === 'na' ? null : Number(v) });
+      showStatus(`Stay in touch set for ${res.Changed}.`);
+      await reload();
+    } catch (ex) {
+      showStatus(errorText(ex, "Couldn't change that."), true);
+    }
+  });
+  on('bulk-delete', 'click', async () => {
+    if (!selected.size) { showStatus('Select some people first.', true); return; }
+    const n = selected.size;
+    if (!confirm(`Permanently delete ${n} ${n === 1 ? 'person' : 'people'} — with their notes, journal and photos? This can't be undone. (Archive instead if you might want them back.)`)) return;
+    try {
+      const res = await postAction('deletePeople', { ids: [...selected] });
+      selected.clear();
+      showStatus(`Deleted ${res.Deleted}.`);
+      await reload();
+    } catch (ex) {
+      showStatus(errorText(ex, "Couldn't delete."), true);
+    }
+  });
   on('bulk-msg', 'click', () => {
     if (!selected.size) { showStatus('Select some people first.', true); return; }
     openMessage(PEOPLE.filter(p => selected.has(p.Id)), `${selected.size} people`);

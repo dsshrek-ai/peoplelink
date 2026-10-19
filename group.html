@@ -8,17 +8,17 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>Group · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page narrow" id="content">Loading&hellip;</main>
 <dialog id="group-dlg" aria-label="Group"></dialog>
 <dialog id="add-dlg" aria-labelledby="ad-title"></dialog>
-<script src="js/mdw-prefs.js?v=3"></script>
-<script src="js/app.js?v=3"></script>
-<script src="js/groups.js?v=3"></script>
-<script src="js/dialogs.js?v=3"></script>
+<script src="js/mdw-prefs.js?v=4"></script>
+<script src="js/app.js?v=4"></script>
+<script src="js/groups.js?v=4"></script>
+<script src="js/dialogs.js?v=4"></script>
 <script>
 renderNav('groups.html');
 const contentEl = document.getElementById('content');
@@ -61,9 +61,25 @@ function render() {
           <div class="sub">${escapeHtml((p.Phones[0] || p.Emails[0] || {}).Value || '')}</div></span></a>
         <button type="button" class="icon-btn" data-remove="${p.Id}" aria-label="Remove ${escapeHtml(displayName(p))} from this group" title="Remove from group">✕</button>
       </li>`).join('') : '<li class="person-row"><span class="empty">No one in this group yet.</span></li>'}</ul>
-    ${hidden ? `<p class="small"><a href="people.html?group=${G.Id}&status=archived">See archived members</a></p>` : ''}`;
+    ${hidden ? `<p class="small"><a href="people.html?group=${G.Id}&status=archived">See archived members</a></p>` : ''}
+    ${shown.length ? `<div class="card" style="margin-top:0.9rem"><h2>⏰ Stay in touch with everyone</h2>
+      <p class="muted small">Sets the same reminder for all ${shown.length} people in this group (you can still change anyone afterwards).</p>
+      <div class="btn-row"><select id="grp-interval" style="width:auto"><option value="">Choose how often…</option><option value="na">N/A — no reminders</option>
+        ${INTERVALS.map(i => `<option value="${i.days}">${i.label}</option>`).join('')}</select>
+        <button type="button" class="btn secondary small" id="grp-interval-btn">Apply</button></div></div>` : ''}`;
 
   document.getElementById('add-btn').addEventListener('click', openAdd);
+  const gib = document.getElementById('grp-interval-btn');
+  if (gib) gib.addEventListener('click', async () => {
+    const v = document.getElementById('grp-interval').value;
+    if (!v) { showStatus('Choose how often first.', true); return; }
+    try {
+      const res = await postAction('setContactInterval', { ids: shown.map(p => p.Id), intervalDays: v === 'na' ? null : Number(v) });
+      showStatus(`Stay in touch set for ${res.Changed} in ${G.Name}.`);
+    } catch (e) {
+      showStatus(errorText(e, "Couldn't change that."), true);
+    }
+  });
   const mb = document.getElementById('msg-btn');
   if (mb) mb.addEventListener('click', () => openMessage(shown, G.Name));
   document.getElementById('edit-btn').addEventListener('click', () => openGroupDialog(G, () => load()));

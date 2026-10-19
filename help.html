@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>Help · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <header class="site-header"></header>
@@ -69,7 +69,7 @@
     <ol>
       <li>On <strong>People</strong>, tap <strong>Select</strong>.</li>
       <li>Tick the people you want (or <strong>Select all shown</strong> after searching or filtering).</li>
-      <li>Choose a group and tap <strong>Add to group</strong> or <strong>Remove from group</strong> — or use <strong>Set status…</strong> to archive them.</li>
+      <li>Choose a group and tap <strong>Add to group</strong> or <strong>Remove from group</strong> — or use <strong>Set status…</strong> to archive them, <strong>Stay in touch…</strong> to set the same reminder for all of them, <strong>✉️ Message</strong>, <strong>Export</strong>, or <strong>Delete</strong>.</li>
       <li>Tap <strong>Done</strong> when you're finished.</li>
     </ol>
   </section>
@@ -81,6 +81,43 @@
       <li><strong>🎉 Next 30 days</strong> lists birthdays and anniversaries coming up, with how old they're turning when you know the year.</li>
       <li><strong>Groups</strong> shows each group and how many people are in it — tap one to open it.</li>
     </ul>
+  </section>
+
+  <section class="card help-topic" id="reports">
+    <h2>Reports</h2>
+    <ol>
+      <li>Tap <strong>Reports</strong> (under <strong>More</strong> on a phone) and pick one:
+        <ul>
+          <li><strong>🎂 Birthdays &amp; anniversaries</strong> — the next 30/60/90 days, or the whole year by month.</li>
+          <li><strong>⏰ Upcoming contacts</strong> — who's overdue or due soon.</li>
+          <li><strong>🤫 Haven't talked to lately</strong> — no contact logged in 3, 6 or 12 months.</li>
+          <li><strong>📒 Group directory</strong> — a roster with phones, emails and addresses.</li>
+          <li><strong>💌 Card &amp; mailing list</strong> — one address per household, ready for cards or labels.</li>
+          <li><strong>📈 Contact summary</strong> — how often you've been in touch each month, and with whom.</li>
+        </ul></li>
+      <li>Use the choices at the top (like a group) to narrow it down.</li>
+      <li>Tap <strong>🖨️ Print</strong>, or <strong>⬇️ CSV</strong> to open it in Excel or Google Sheets (for example, to print mailing labels).</li>
+    </ol>
+  </section>
+
+  <section class="card help-topic" id="duplicates">
+    <h2>Duplicates</h2>
+    <ol>
+      <li>On <strong>People</strong>, tap <strong>Find duplicates</strong> (also under <strong>More</strong>).</li>
+      <li>Pairs that share an email, phone number or name are listed.</li>
+      <li>Tap <strong>Merge…</strong>, choose which one stays, and tap <strong>Merge</strong>. Everything from the other one moves over — numbers, addresses, groups, notes, journal, activities, family links — and then it's removed.</li>
+      <li>If two people really are different, tap <strong>Not the same</strong> to hide that pair.</li>
+    </ol>
+  </section>
+
+  <section class="card help-topic" id="backup">
+    <h2>Backup &amp; restore</h2>
+    <ol>
+      <li>Go to <strong>More</strong> → <strong>💾 Backup &amp; restore</strong> and tap <strong>Download backup</strong>. Tick <strong>Include photos</strong> to keep pictures too.</li>
+      <li>Save the file somewhere safe. It includes your private notes and journal, so keep it private.</li>
+      <li>To restore, choose the file, check the summary, type <strong>REPLACE</strong>, and tap <strong>Restore this backup</strong>. This replaces everything currently in PeopleLink with the backup.</li>
+    </ol>
+    <p>A good habit: download a backup every month or two, and always before a big import.</p>
   </section>
 
   <section class="card help-topic" id="privacy">
@@ -150,6 +187,7 @@
       <li>Each time you <strong>📝 Log contact</strong>, the clock starts over.</li>
       <li>For a one-time reminder, set <strong>Follow up by</strong> a date instead (or as well). Logging a contact clears it.</li>
     </ol>
+    <p><strong>Many at once:</strong> on a group page, use <strong>Stay in touch with everyone</strong>; or on People, tap <strong>Select</strong>, tick people, and choose <strong>Stay in touch…</strong>.</p>
     <p>Everyone starts on <strong>N/A</strong> — no reminders, never overdue. <strong>Reminders</strong> (under More on a phone) lists who's overdue, due this week, and coming up, and the Dashboard shows the most urgent. On People, the <strong>contact status</strong> filter finds who's overdue or who you haven't talked to in a year.</p>
   </section>
 
@@ -186,8 +224,8 @@
     <p>The message is sent from your own phone or email app. For a very long list, use <strong>📋 Copy</strong> and paste the addresses yourself.</p>
   </section>
 </main>
-<script src="js/mdw-prefs.js?v=3"></script>
-<script src="js/app.js?v=3"></script>
+<script src="js/mdw-prefs.js?v=4"></script>
+<script src="js/app.js?v=4"></script>
 <script>
 renderNav('help.html');
 const topics = [...document.querySelectorAll('.help-topic')];

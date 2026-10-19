@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Duplicates · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<dialog id="merge-dlg" aria-labelledby="mg-title"></dialog>
+<script src="js/mdw-prefs.js?v=4"></script>
+<script src="js/app.js?v=4"></script>
+<script src="js/transfer.js?v=4"></script>
+<script>
+renderNav('people.html');
+const contentEl = document.getElementById('content');
+const DISMISS_KEY = 'plNotDuplicates';
+let PEOPLE = [];
+let GROUPS = [];
+
+function dismissed() {
+  try { return new Set(JSON.parse(localStorage.getItem(DISMISS_KEY) || '[]')); } catch (e) { return new Set(); }
+}
+const pairKey = (a, b) => [a, b].sort((x, y) => x - y).join('-');
+
+// Pairs that share an email, a phone number, or a full name.
+function findPairs() {
+  const seen = new Map();
+  const add = (a, b, reason) => {
+    if (a.Id === b.Id) return;
+    const k = pairKey(a.Id, b.Id);
+    if (!seen.has(k)) seen.set(k, { a, b, reasons: new Set() });
+    seen.get(k).reasons.add(reason);
+  };
+  const index = (keyFn, reason) => {
+    const m = new Map();
+    PEOPLE.forEach(p => keyFn(p).filter(Boolean).forEach(k => {
+      if (m.has(k)) m.get(k).forEach(o => add(o, p, reason));
+      m.set(k, (m.get(k) || []).concat(p));
+    }));
+  };
+  index(p => p.Emails.map(e => e.Value.toLowerCase()), 'same email');
+  index(p => p.Phones.map(x => phoneKey(x.Value)).filter(k => k.length >= 7), 'same phone');
+  index(p => [nameKey(p.FirstName, p.LastName, p.Organization), p.Nickname ? nameKey(p.Nickname, p.LastName, null) : ''], 'same name');
+  const skip = dismissed();
+  return [...seen.entries()].filter(([k]) => !skip.has(k)).map(([, v]) => v);
+}
+
+function summary(p) {
+  const bits = [
+    p.Phones.length ? `${p.Phones.length} phone${p.Phones.length > 1 ? 's' : ''}` : '',
+    p.Emails.length ? `${p.Emails.length} email${p.Emails.length > 1 ? 's' : ''}` : '',
+    p.Addresses.length ? `${p.Addresses.length} address${p.Addresses.length > 1 ? 'es' : ''}` : '',
+    p.GroupIds.length ? `${p.GroupIds.length} group${p.GroupIds.length > 1 ? 's' : ''}` : '',
+    p.LastContact ? `last contact ${agoText(p.LastContact)}` : '',
+  ].filter(Boolean);
+  return bits.join(' · ') || 'name only';
+}
+
+function render() {
+  const pairs = findPairs();
+  const skipped = dismissed().size;
+  contentEl.innerHTML = `
+    <p class="small"><a href="people.html">← People</a></p>
+    <h1 class="page-title">🔀 Possible duplicates</h1>
+    <p class="muted">People who share an email, phone number or name. <strong>Merge</strong> keeps one and moves everything from the other into it — phones, emails, addresses, groups, notes, journal, activities and family links.</p>
+    ${pairs.length ? `<ul class="dup-pairs">${pairs.map((x, i) => `
+      <li class="card">
+        <div class="pair">
+          ${[x.a, x.b].map(p => `<a class="pair-who" href="person.html?id=${p.Id}">${avatarHtml(p, 'sm')}<span><strong>${escapeHtml(displayName(p))}</strong>${p.Status !== 'active' ? ` <span class="badge ${p.Status}">${p.Status}</span>` : ''}<div class="small muted">${escapeHtml(summary(p))}</div></span></a>`).join('')}
+        </div>
+        <div class="btn-row" style="margin-top:0.5rem"><span class="small muted" style="margin-right:auto">${escapeHtml([...x.reasons].join(', '))}</span>
+          <button type="button" class="btn secondary small" data-skip="${i}">Not the same</button>
+          <button type="button" class="btn small" data-merge="${i}">Merge…</button></div>
+      </li>`).join('')}</ul>`
+      : '<div class="card"><p class="empty">No likely duplicates found. 🎉</p></div>'}
+    ${skipped ? `<p class="small"><button type="button" class="btn secondary small" id="reset">Show ${skipped} pair${skipped === 1 ? '' : 's'} I marked "not the same"</button></p>` : ''}`;
+  contentEl.querySelectorAll('[data-skip]').forEach(b => b.addEventListener('click', () => {
+    const x = pairs[Number(b.dataset.skip)];
+    const s = dismissed();
+    s.add(pairKey(x.a.Id, x.b.Id));
+    try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...s])); } catch (e) {}
+    render();
+  }));
+  contentEl.querySelectorAll('[data-merge]').forEach(b => b.addEventListener('click', () => openMerge(pairs[Number(b.dataset.merge)])));
+  const r = document.getElementById('reset');
+  if (r) r.addEventListener('click', () => { try { localStorage.removeItem(DISMISS_KEY); } catch (e) {} render(); });
+}
+
+function openMerge(x) {
+  const dlg = document.getElementById('merge-dlg');
+  // Suggest keeping whichever has more on it.
+  const score = p => p.Phones.length + p.Emails.length + p.Addresses.length + p.GroupIds.length + (p.LastContact ? 2 : 0) + (p.PhotoKey ? 1 : 0);
+  let keep = score(x.a) >= score(x.b) ? x.a : x.b;
+  const render = () => {
+    const other = keep === x.a ? x.b : x.a;
+    // Same name on both? Tell them apart by what's on each record.
+    const same = displayName(keep) === displayName(other);
+    const label = p => same ? `the ${displayName(p)} with ${summary(p)}` : displayName(p);
+    dlg.innerHTML = `<div class="dlg">
+      <h2 id="mg-title">Merge two people</h2>
+      <p class="small">Which one should stay?</p>
+      ${[x.a, x.b].map(p => `<label class="merge-choice"><input type="radio" name="keep" value="${p.Id}" ${p === keep ? 'checked' : ''}>
+        ${avatarHtml(p, 'sm')}<span><strong>${escapeHtml(fullName(p))}</strong><div class="small muted">${escapeHtml(summary(p))}</div></span></label>`).join('')}
+      <div class="note small" style="margin-top:0.7rem">
+        <strong>${escapeHtml(label(keep))}</strong> stays. From ${escapeHtml(same ? 'the other one' : displayName(other))} it gets any phones, emails and addresses it doesn't have, blank details filled in, notes added on, and all groups, journal entries, activities and family links.
+        Then ${escapeHtml(same ? 'the other one' : displayName(other))} is removed. This can't be undone.
+      </div>
+      <div class="dlg-actions"><button type="button" class="btn secondary" id="mg-cancel">Cancel</button><button type="button" class="btn" id="mg-go">Merge</button></div>
+    </div>`;
+    dlg.querySelectorAll('input[name=keep]').forEach(i => i.addEventListener('change', () => { keep = Number(i.value) === x.a.Id ? x.a : x.b; render(); }));
+    dlg.querySelector('#mg-cancel').addEventListener('click', () => dlg.close());
+    dlg.querySelector('#mg-go').addEventListener('click', async () => {
+      try {
+        await postAction('mergePeople', { keepId: keep.Id, mergeId: other.Id });
+        dlg.close();
+        showStatus(`Merged into ${displayName(keep)}.`);
+        load();
+      } catch (e) {
+        showStatus(errorText(e, "Couldn't merge."), true);
+      }
+    });
+  };
+  render();
+  dlg.showModal();
+}
+
+async function load() {
+  try {
+    const data = await fetchData('people');
+    PEOPLE = data.People;
+    GROUPS = data.Groups;
+    render();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+}
+load();
+</script>
+</body>
+</html>

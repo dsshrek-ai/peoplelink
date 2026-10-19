@@ -51,6 +51,9 @@ don't keep a stale copy.
   code reads those tables. "Last contact" is the newest journal entry, and
   next-contact / overdue is worked out in the browser (`nextContact` in
   `js/app.js`).
+- Backup (`action=backup`) is the one place private data leaves the app --
+  only to the logged-in owner, as a JSON file. Restore replaces all of that
+  user's pl_* data in one transaction and needs `confirm: 'REPLACE'`.
 - CSV import/export happens in the browser (`js/transfer.js`); the server
   only receives the already-decided create / merge / skip items, in batches
   of 200. Merge only fills empty fields and adds new phones/emails/addresses.
@@ -59,12 +62,15 @@ don't keep a stale copy.
 
 `tests/api.test.mjs` (Milestone A), `tests/api-b.test.mjs` (Milestone B:
 import engine and group sharing) and `tests/api-c.test.mjs` (Milestone C:
-journal, reminders, relationships, households, activities) run the acceptance checks against a
+journal, reminders, relationships, households, activities) and
+`tests/api-d.test.mjs` (Milestone D: merge, backup/restore, bulk reminders,
+contact summary) run the acceptance checks against a
 **fresh** test database (Hub tables + `schema.sql`, users `alice` / `bob`
 granted, `carol` not, all with password `pw`):
 
     node tests/api.test.mjs   http://127.0.0.1:8098/api/api.php path/to/small.jpg
     node tests/api-b.test.mjs http://127.0.0.1:8098/api/api.php path/to/small.jpg
     node tests/api-c.test.mjs http://127.0.0.1:8098/api/api.php path/to/small.jpg
+    node tests/api-d.test.mjs http://127.0.0.1:8098/api/api.php path/to/small.jpg
 
 (Use a fresh database for each file.)

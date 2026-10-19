@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Reports · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=4"></script>
+<script src="js/app.js?v=4"></script>
+<script src="js/transfer.js?v=4"></script>
+<script>
+renderNav('reports.html');
+const contentEl = document.getElementById('content');
+let PEOPLE = [];
+let GROUPS = [];
+let HOUSEHOLDS = [];
+let SUMMARY = null;
+
+const REPORTS = [
+  { id: 'birthdays', icon: '🎂', title: 'Birthdays & anniversaries', blurb: 'Coming up, or the whole year by month.' },
+  { id: 'upcoming', icon: '⏰', title: 'Upcoming contacts', blurb: 'Who\'s overdue or due soon.' },
+  { id: 'quiet', icon: '🤫', title: 'Haven\'t talked to lately', blurb: 'No contact logged in a while.' },
+  { id: 'directory', icon: '📒', title: 'Group directory', blurb: 'A printable roster with phones, emails, addresses.' },
+  { id: 'cards', icon: '💌', title: 'Card & mailing list', blurb: 'One line per household — for cards or labels.' },
+  { id: 'summary', icon: '📈', title: 'Contact summary', blurb: 'How often you\'ve been in touch, and with whom.' },
+];
+
+const state = {
+  report: qsParam('r') || '',
+  group: '',
+  range: '30',          // birthdays: 30 / 60 / 90 / year
+  anniversaries: true,
+  window: '14',         // upcoming
+  months: '6',          // quiet + summary
+  fields: { phone: true, email: true, address: true, birthday: false },
+};
+
+// ---- helpers ----
+const active = () => PEOPLE.filter(p => p.Status === 'active');
+function inGroup(p) {
+  return !state.group || p.GroupIds.includes(Number(state.group));
+}
+function groupName() {
+  const g = GROUPS.find(x => String(x.Id) === state.group);
+  return g ? g.Name : '';
+}
+const firstPhone = p => (p.Phones.find(x => x.Label === 'mobile') || p.Phones[0] || {}).Value || '';
+const firstEmail = p => (p.Emails[0] || {}).Value || '';
+const homeAddress = p => p.Addresses.find(a => a.Label === 'home') || p.Addresses[0] || null;
+const byLast = (a, b) => sortKey(a, 'last').localeCompare(sortKey(b, 'last'));
+
+function table(cols, rows) {
+  if (!rows.length) return '<p class="empty">Nothing to show.</p>';
+  return `<div class="table-wrap"><table class="report">
+    <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${r.map(v => `<td>${v && v.html !== undefined ? v.html : escapeHtml(v ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table></div>`;
+}
+// A cell that shows HTML but exports as plain text.
+const cell = (html, text) => ({ html, text });
+const plain = v => (v && v.text !== undefined ? v.text : v);
+const nameCell = p => cell(`<a href="person.html?id=${p.Id}">${escapeHtml(displayName(p))}</a>`, fullName(p));
+
+// ---- the reports: each returns { title, cols, rows, intro? } ----
+function rBirthdays() {
+  const events = [];
+  active().filter(inGroup).forEach(p => {
+    [['Birthday', 'Birthday'], ...(state.anniversaries ? [['Anniversary', 'Anniversary']] : [])].forEach(([field, label]) => {
+      const d = p[field];
+      if (!d) return;
+      events.push({ p, d, label, n: daysUntil(d), years: turning(d) });
+    });
+  });
+  if (state.range === 'year') {
+    events.sort((a, b) => a.d.Month - b.d.Month || a.d.Day - b.d.Day || byLast(a.p, b.p));
+    return {
+      title: `Birthdays${state.anniversaries ? ' & anniversaries' : ''} by month`,
+      cols: ['Month', 'Day', 'Name', 'Occasion', 'Year'],
+      rows: events.map(e => [MONTHS[e.d.Month - 1], String(e.d.Day), nameCell(e.p), e.label, e.d.Year ? String(e.d.Year) : '']),
+      monthGroups: true,
+    };
+  }
+  const days = Number(state.range);
+  const list = events.filter(e => e.n <= days).sort((a, b) => a.n - b.n || byLast(a.p, b.p));
+  return {
+    title: `Birthdays${state.anniversaries ? ' & anniversaries' : ''} — next ${days} days`,
+    cols: ['Date', 'When', 'Name', 'Occasion', 'Turning'],
+    rows: list.map(e => [`${MONTHS[e.d.Month - 1]} ${e.d.Day}`, whenLabel(e.n), nameCell(e.p), e.label,
+      e.years === null ? '' : e.label === 'Birthday' ? String(e.years) : `${e.years} years`]),
+  };
+}
+
+function rUpcoming() {
+  const limit = Number(state.window);
+  const list = active().filter(inGroup).map(p => ({ p, n: nextContact(p) }))
+    .filter(x => x.n && daysFromToday(x.n.date) <= limit)
+    .sort((a, b) => a.n.date.localeCompare(b.n.date) || byLast(a.p, b.p));
+  return {
+    title: `Upcoming contacts — overdue and next ${limit} days`,
+    intro: list.length ? '' : 'No one is due. Set "Stay in touch" on people (or a whole group) to see them here.',
+    cols: ['Name', 'Due', 'Status', 'Last contact', 'Phone'],
+    rows: list.map(x => [nameCell(x.p), fmtYmd(x.n.date), cell(`<span class="due ${contactStatus(x.p)}">${escapeHtml(dueText(x.p))}</span>`, dueText(x.p)),
+      x.p.LastContact ? fmtYmd(x.p.LastContact, true) : 'never', firstPhone(x.p)]),
+  };
+}
+
+function rQuiet() {
+  const months = Number(state.months);
+  const cutoff = addDaysYmd(todayYmd(), -Math.round(months * 30.44));
+  const list = active().filter(inGroup).filter(p => !p.LastContact || p.LastContact < cutoff)
+    .sort((a, b) => (a.LastContact || '').localeCompare(b.LastContact || '') || byLast(a, b));
+  return {
+    title: `No contact logged in ${months} months${state.group ? '' : ''}`,
+    intro: 'Based on your journal. People you\'ve never logged a contact with are listed first.',
+    cols: ['Name', 'Last contact', 'Phone', 'Email'],
+    rows: list.map(p => [nameCell(p), p.LastContact ? `${fmtYmd(p.LastContact, true)} (${agoText(p.LastContact)})` : 'never', firstPhone(p), firstEmail(p)]),
+  };
+}
+
+function rDirectory() {
+  const f = state.fields;
+  const list = active().filter(inGroup).sort(byLast);
+  const cols = ['Name'];
+  if (f.phone) cols.push('Phone');
+  if (f.email) cols.push('Email');
+  if (f.address) cols.push('Address');
+  if (f.birthday) cols.push('Birthday');
+  return {
+    title: `${groupName() || 'Everyone'} — directory`,
+    cols,
+    rows: list.map(p => {
+      const r = [nameCell(p)];
+      if (f.phone) r.push(p.Phones.map(x => x.Value).join('\n'));
+      if (f.email) r.push(p.Emails.map(x => x.Value).join('\n'));
+      if (f.address) { const a = homeAddress(p); r.push(a ? addressLines(a).join('\n') : ''); }
+      if (f.birthday) r.push(p.Birthday ? `${MONTHS[p.Birthday.Month - 1]} ${p.Birthday.Day}` : '');
+      return r;
+    }),
+  };
+}
+
+// One line per household; people not in a household get their own line.
+function rCards() {
+  const people = active().filter(inGroup);
+  const lines = [];
+  const missing = [];
+  const seenHouse = new Set();
+  people.sort(byLast).forEach(p => {
+    const h = p.HouseholdId && HOUSEHOLDS.find(x => x.Id === p.HouseholdId);
+    if (h) {
+      if (seenHouse.has(h.Id)) return;
+      seenHouse.add(h.Id);
+      const members = PEOPLE.filter(x => x.HouseholdId === h.Id && x.Status === 'active');
+      const addr = addressLines(h).length ? h : members.map(homeAddress).find(Boolean);
+      const entry = { name: h.Name, who: members.map(displayName).join(', '), a: addr };
+      (addr ? lines : missing).push(entry);
+      return;
+    }
+    const a = homeAddress(p);
+    (a ? lines : missing).push({ name: fullName(p), who: '', a, p });
+  });
+  lines.sort((x, y) => x.name.localeCompare(y.name));
+  return {
+    title: `Card & mailing list${groupName() ? ' — ' + groupName() : ''}`,
+    intro: `${lines.length} address${lines.length === 1 ? '' : 'es'}. People in the same household share one line.${missing.length ? ` ${missing.length} with no address: ${missing.map(m => m.name).join(', ')}.` : ''}`,
+    cols: ['Name', 'Street', 'City', 'State', 'Postal code', 'Country'],
+    rows: lines.map(l => [l.who ? cell(`${escapeHtml(l.name)}<div class="small muted">${escapeHtml(l.who)}</div>`, l.name) : l.name,
+      l.a.Street || '', l.a.City || '', l.a.Region || '', l.a.PostalCode || '', l.a.Country || '']),
+  };
+}
+
+function rSummary() {
+  if (!SUMMARY) return { title: 'Contact summary', intro: 'Loading…', cols: [], rows: [] };
+  const months = Number(state.months);
+  const keys = [];
+  const t = todayParts();
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(t.Year, t.Month - 1 - i, 1);
+    keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  const counts = {};
+  SUMMARY.ByMonth.forEach(r => { counts[r.Month] = counts[r.Month] || {}; counts[r.Month][r.Kind] = r.Count; });
+  const max = Math.max(1, ...keys.map(k => Object.values(counts[k] || {}).reduce((a, b) => a + b, 0)));
+  const rows = keys.map(k => {
+    const c = counts[k] || {};
+    const total = Object.values(c).reduce((a, b) => a + b, 0);
+    const label = new Date(k + '-01T00:00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+    return [label, cell(`<span class="nowrap"><span class="bar" style="width:${Math.round(total / max * 4)}rem"></span> ${total}</span>`, String(total)),
+      ...JOURNAL_KINDS.map(kd => String(c[kd.v] || ''))];
+  });
+  const top = SUMMARY.ByPerson.slice(0, 10).map(r => ({ p: PEOPLE.find(x => x.Id === r.PersonId), n: r.Count })).filter(x => x.p);
+  return {
+    title: `Contact summary — last ${months} months`,
+    cols: ['Month', 'Total', ...JOURNAL_KINDS.map(k => `${k.icon} ${k.label}`)],
+    rows,
+    after: top.length ? `<h3 style="margin-top:1rem">Most in touch</h3>${table(['Name', 'Contacts'], top.map(x => [nameCell(x.p), String(x.n)]))}` : '',
+  };
+}
+
+const BUILDERS = { birthdays: rBirthdays, upcoming: rUpcoming, quiet: rQuiet, directory: rDirectory, cards: rCards, summary: rSummary };
+
+// ---- page ----
+function optionsHtml() {
+  const groupSel = `<label class="inline">Group <select id="o-group" style="width:auto"><option value="">Everyone</option>${GROUPS.filter(g => !g.Archived).map(g => `<option value="${g.Id}" ${String(g.Id) === state.group ? 'selected' : ''}>${escapeHtml(g.Name)}</option>`).join('')}</select></label>`;
+  const sel = (id, val, opts) => `<select id="${id}" style="width:auto">${opts.map(([v, l]) => `<option value="${v}" ${v === val ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  switch (state.report) {
+    case 'birthdays': return `${sel('o-range', state.range, [['30', 'Next 30 days'], ['60', 'Next 60 days'], ['90', 'Next 90 days'], ['year', 'Whole year by month']])}
+      <label class="inline"><input type="checkbox" id="o-anniv" ${state.anniversaries ? 'checked' : ''}> Anniversaries too</label>${groupSel}`;
+    case 'upcoming': return `${sel('o-window', state.window, [['7', 'Next 7 days'], ['14', 'Next 14 days'], ['30', 'Next 30 days'], ['60', 'Next 60 days']])}${groupSel}`;
+    case 'quiet': return `${sel('o-months', state.months, [['3', '3 months'], ['6', '6 months'], ['12', '12 months'], ['24', '2 years']])}${groupSel}`;
+    case 'directory': return `${groupSel}${['phone', 'email', 'address', 'birthday'].map(f => `<label class="inline"><input type="checkbox" data-field="${f}" ${state.fields[f] ? 'checked' : ''}> ${labelText(f)}</label>`).join('')}`;
+    case 'cards': return groupSel;
+    case 'summary': return sel('o-months', state.months, [['3', 'Last 3 months'], ['6', 'Last 6 months'], ['12', 'Last 12 months']]);
+  }
+  return '';
+}
+
+function renderReport() {
+  const r = BUILDERS[state.report]();
+  const out = document.getElementById('report-out');
+  let body = table(r.cols, r.rows);
+  // "Whole year": one small table per month reads better (and prints nicely).
+  if (r.monthGroups && r.rows.length) {
+    body = MONTHS.map(m => {
+      const rows = r.rows.filter(x => x[0] === m).map(x => x.slice(1));
+      return rows.length ? `<h3 class="month-title">${m}</h3>${table(r.cols.slice(1), rows)}` : '';
+    }).join('');
+  }
+  out.innerHTML = `<h2 class="print-title">${escapeHtml(r.title)}</h2>
+    <p class="muted small print-date">Printed ${escapeHtml(fmtYmd(todayYmd(), true))}${r.rows.length ? ` · ${r.rows.length} ${r.rows.length === 1 ? 'row' : 'rows'}` : ''}</p>
+    ${r.intro ? `<p class="small">${escapeHtml(r.intro)}</p>` : ''}${body}${r.after || ''}`;
+  document.getElementById('csv-btn').disabled = !r.rows.length;
+  document.getElementById('csv-btn').onclick = () => {
+    const rows = [r.cols, ...r.rows.map(row => row.map(plain))];
+    downloadText('﻿' + toCsv(rows), `PeopleLink-${state.report}-${todayYmd()}.csv`);
+  };
+}
+
+function render() {
+  if (!state.report) {
+    contentEl.innerHTML = `
+      <h1 class="page-title">📊 Reports</h1>
+      <p class="muted">Pick a report. Each one can be printed or downloaded as a spreadsheet (CSV).</p>
+      <ul class="report-picker">${REPORTS.map(r => `<li><a href="reports.html?r=${r.id}" data-r="${r.id}"><span class="ricon" aria-hidden="true">${r.icon}</span>
+        <span><strong>${escapeHtml(r.title)}</strong><span class="small muted">${escapeHtml(r.blurb)}</span></span></a></li>`).join('')}</ul>`;
+    contentEl.querySelectorAll('[data-r]').forEach(a => a.addEventListener('click', e => {
+      e.preventDefault();
+      state.report = a.dataset.r;
+      history.replaceState({}, '', `reports.html?r=${state.report}`);
+      render();
+    }));
+    return;
+  }
+  const meta = REPORTS.find(r => r.id === state.report) || REPORTS[0];
+  contentEl.innerHTML = `
+    <p class="small no-print"><a href="reports.html" id="back">← All reports</a></p>
+    <h1 class="page-title no-print">${meta.icon} ${escapeHtml(meta.title)}</h1>
+    <div class="toolbar no-print">${optionsHtml()}
+      <span class="btn-row" style="margin-left:auto"><button type="button" class="btn secondary small" id="print-btn">🖨️ Print</button>
+      <button type="button" class="btn secondary small" id="csv-btn">⬇️ CSV</button></span></div>
+    <div class="card report-card" id="report-out"></div>`;
+  document.getElementById('back').addEventListener('click', e => { e.preventDefault(); state.report = ''; history.replaceState({}, '', 'reports.html'); render(); });
+  document.getElementById('print-btn').addEventListener('click', () => window.print());
+  const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('change', () => { fn(el); renderReport(); }); };
+  bind('o-group', el => { state.group = el.value; });
+  bind('o-range', el => { state.range = el.value; });
+  bind('o-anniv', el => { state.anniversaries = el.checked; });
+  bind('o-window', el => { state.window = el.value; });
+  bind('o-months', el => { state.months = el.value; if (state.report === 'summary') loadSummary(); });
+  contentEl.querySelectorAll('[data-field]').forEach(el => el.addEventListener('change', () => { state.fields[el.dataset.field] = el.checked; renderReport(); }));
+  if (state.report === 'summary' && !SUMMARY) loadSummary();
+  renderReport();
+}
+
+async function loadSummary() {
+  const t = todayParts();
+  const from = ymdOf(new Date(t.Year, t.Month - Number(state.months), 1));
+  SUMMARY = await fetchData('journalSummary', { from });
+  if (state.report === 'summary') renderReport();
+}
+
+(async () => {
+  try {
+    const [p, h] = await Promise.all([fetchData('people'), fetchData('households')]);
+    PEOPLE = p.People;
+    GROUPS = p.Groups;
+    HOUSEHOLDS = h.Households;
+    if (!BUILDERS[state.report]) state.report = '';
+    render();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1289,6 +1289,323 @@ function completeActivity(int $userId, int $id, bool $logToJournal): int {
   return $added;
 }
 
+// ---- Milestone D: merge duplicates ----
+
+// Folds $mergeId into $keepId and deletes $mergeId. Nothing is lost: blank
+// fields are filled, phones/emails/addresses/groups are combined, notes are
+// appended, and journal entries, activities and family links move over.
+function mergePeople(int $userId, int $keepId, int $mergeId): void {
+  if ($keepId === $mergeId) {
+    fail('Pick two different people');
+  }
+  $k = ownPerson($userId, $keepId);
+  $m = ownPerson($userId, $mergeId);
+  $conn = db();
+  $conn->begin_transaction();
+
+  $sets = [];
+  $types = '';
+  $vals = [];
+  foreach (['first_name', 'middle_name', 'last_name', 'nickname', 'organization', 'job_title', 'occupation',
+            'contact_interval_days', 'household_id', 'photo_key'] as $col) {
+    if ($k[$col] === null && $m[$col] !== null) {
+      $sets[] = "$col = ?";
+      $types .= in_array($col, ['contact_interval_days', 'household_id'], true) ? 'i' : 's';
+      $vals[] = $m[$col];
+    }
+  }
+  foreach ([['birth_year', 'birth_month', 'birth_day'], ['anniv_year', 'anniv_month', 'anniv_day']] as [$y, $mo, $d]) {
+    if ($k[$mo] === null && $m[$mo] !== null) {
+      $sets[] = "$y = ?, $mo = ?, $d = ?";
+      $types .= 'iii';
+      array_push($vals, $m[$y], $m[$mo], $m[$d]);
+    }
+  }
+  if ($m['notes'] !== null && $m['notes'] !== $k['notes']) {
+    $sets[] = 'notes = ?';
+    $types .= 's';
+    $vals[] = $k['notes'] === null ? $m['notes'] : $k['notes'] . "\n\n" . $m['notes'];
+  }
+  // The sooner follow-up wins; pinned if either was.
+  if ($m['follow_up_date'] !== null && ($k['follow_up_date'] === null || $m['follow_up_date'] < $k['follow_up_date'])) {
+    $sets[] = 'follow_up_date = ?';
+    $types .= 's';
+    $vals[] = $m['follow_up_date'];
+  }
+  if ($m['is_pinned'] && !$k['is_pinned']) {
+    $sets[] = 'is_pinned = 1';
+  }
+  if ($sets) {
+    $types .= 'ii';
+    array_push($vals, $keepId, $userId);
+    exec1('UPDATE pl_people SET ' . implode(', ', $sets) . ' WHERE id = ? AND user_id = ?', $types, $vals);
+  }
+
+  // Phones, emails, addresses the kept person doesn't already have.
+  $rec = ['phones' => [], 'emails' => [], 'addresses' => []];
+  foreach (q('SELECT * FROM pl_contact_methods WHERE person_id = ? ORDER BY sort_order, id', 'i', [$mergeId]) as $x) {
+    $rec[$x['kind'] === 'phone' ? 'phones' : 'emails'][] = [$x['label'], $x['value']];
+  }
+  foreach (q('SELECT * FROM pl_addresses WHERE person_id = ? ORDER BY sort_order, id', 'i', [$mergeId]) as $a) {
+    $rec['addresses'][] = [$a['label'], $a['street'], $a['city'], $a['region'], $a['postal_code'], $a['country']];
+  }
+  $kRow = ownPerson($userId, $keepId);
+  mergeRecord($userId, $keepId, $rec + array_fill_keys(['first', 'middle', 'last', 'nick', 'org', 'title', 'notes'], null)
+    + ['pinned' => false, 'birthday' => [null, null, null], 'anniversary' => [null, null, null]]);
+
+  exec1('INSERT IGNORE INTO pl_group_members (group_id, person_id) SELECT group_id, ? FROM pl_group_members WHERE person_id = ?',
+        'ii', [$keepId, $mergeId]);
+  exec1('UPDATE pl_journal_entries SET person_id = ? WHERE person_id = ? AND user_id = ?', 'iii', [$keepId, $mergeId, $userId]);
+  exec1('INSERT IGNORE INTO pl_activity_participants (activity_id, person_id) SELECT activity_id, ? FROM pl_activity_participants WHERE person_id = ?',
+        'ii', [$keepId, $mergeId]);
+  // Family links: re-point to the kept person unless that would link them
+  // to themselves or duplicate a link they already have.
+  foreach (q('SELECT * FROM pl_relationships WHERE user_id = ? AND (person_id = ? OR related_person_id = ?)', 'iii', [$userId, $mergeId, $mergeId]) as $r) {
+    $a = (int)$r['person_id'] === $mergeId ? $keepId : (int)$r['person_id'];
+    $b = (int)$r['related_person_id'] === $mergeId ? $keepId : (int)$r['related_person_id'];
+    $exists = q('SELECT 1 FROM pl_relationships WHERE user_id = ? AND ((person_id = ? AND related_person_id = ?) OR (person_id = ? AND related_person_id = ?)) AND id <> ?',
+                'iiiiii', [$userId, $a, $b, $b, $a, (int)$r['id']]);
+    if ($a === $b || $exists) {
+      exec1('DELETE FROM pl_relationships WHERE id = ?', 'i', [(int)$r['id']]);
+    } else {
+      exec1('UPDATE pl_relationships SET person_id = ?, related_person_id = ? WHERE id = ?', 'iii', [$a, $b, (int)$r['id']]);
+    }
+  }
+  exec1('DELETE FROM pl_people WHERE id = ? AND user_id = ?', 'ii', [$mergeId, $userId]);
+  $conn->commit();
+  // The merged person's photo is either the kept person's photo now, or unused.
+  if ($m['photo_key'] && $m['photo_key'] !== ($kRow['photo_key'] ?? null)) {
+    deletePhotoFiles($m['photo_key']);
+  }
+}
+
+// ---- Milestone D: backup & restore ----
+// A backup is one JSON file with everything the user owns in PeopleLink --
+// including the private notes, journal, reminders and links that exports and
+// shares leave out. Photos are optional (base64), because they make the file
+// much bigger.
+
+const BACKUP_VERSION = 1;
+
+function backupData(int $userId, bool $withPhotos): array {
+  $people = loadPeople($userId, null, true);
+  $journal = loadJournal($userId, null, null, 1000000);
+  $out = [
+    'App' => 'PeopleLink',
+    'BackupVersion' => BACKUP_VERSION,
+    'CreatedAt' => gmdate('c'),
+    'People' => $people,
+    'Groups' => array_map(fn($g) => ['Id' => (int)$g['id'], 'Name' => $g['name'], 'Description' => $g['description'],
+      'Color' => $g['color'], 'Icon' => $g['icon'], 'Archived' => (bool)$g['is_archived']],
+      q('SELECT * FROM pl_groups WHERE user_id = ? ORDER BY id', 'i', [$userId])),
+    'Households' => loadHouseholds($userId),
+    'Relationships' => array_map(fn($r) => ['PersonId' => (int)$r['person_id'], 'RelatedId' => (int)$r['related_person_id'],
+      'Kind' => $r['kind'], 'Label' => $r['label']],
+      q('SELECT * FROM pl_relationships WHERE user_id = ? ORDER BY id', 'i', [$userId])),
+    'Activities' => loadActivities($userId),
+    'Journal' => $journal,
+    'Photos' => (object)[],
+  ];
+  if ($withPhotos) {
+    $keys = array_filter(array_merge(array_column($people, 'PhotoKey'),
+      ...array_map(fn($e) => array_column($e['Photos'], 'Key'), $journal ?: [['Photos' => []]])));
+    $photos = [];
+    foreach (array_unique($keys) as $key) {
+      $full = photoPath($key, false);
+      $thumb = photoPath($key, true);
+      if (is_file($full) && is_file($thumb)) {
+        $photos[$key] = ['Full' => base64_encode(file_get_contents($full)), 'Thumb' => base64_encode(file_get_contents($thumb))];
+      }
+    }
+    $out['Photos'] = (object)$photos;
+  }
+  return $out;
+}
+
+// Decodes and checks one backed-up JPEG; null if it isn't one.
+function restoredJpeg($b64): ?string {
+  if (!is_string($b64) || strlen($b64) > 12000000) {
+    return null;
+  }
+  $bytes = base64_decode($b64, true);
+  if ($bytes === false) {
+    return null;
+  }
+  $info = @getimagesizefromstring($bytes);
+  return is_array($info) && $info[2] === IMAGETYPE_JPEG ? $bytes : null;
+}
+
+// Replaces ALL of this user's PeopleLink data with the backup. Returns counts.
+function restoreData(int $userId, array $d): array {
+  if (($d['App'] ?? '') !== 'PeopleLink' || (int)($d['BackupVersion'] ?? 0) !== BACKUP_VERSION) {
+    fail('That file isn\'t a PeopleLink backup');
+  }
+  $str = fn($v, $max) => strOrNull(is_scalar($v) ? $v : null, $max);
+  $date = function ($v) {
+    return is_string($v) && preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $v, $mm) && checkdate((int)$mm[2], (int)$mm[3], (int)$mm[1]) ? $v : null;
+  };
+  $part = fn($dj) => is_array($dj) ? lenientDate(['year' => $dj['Year'] ?? null, 'month' => $dj['Month'] ?? null, 'day' => $dj['Day'] ?? null]) : [null, null, null];
+  $photosIn = is_array($d['Photos'] ?? null) ? $d['Photos'] : [];
+  $written = [];   // new photo files written during this restore
+  $usedKeys = [];  // every key the restored data points at
+  // A photo comes back from the file if the backup has it, else from the
+  // server if that key's files still exist; otherwise it's dropped.
+  $photoKey = function ($key) use ($photosIn, &$written, &$usedKeys) {
+    if (!is_string($key) || !preg_match('/^[0-9a-f]{32}$/', $key)) {
+      return null;
+    }
+    if (isset($photosIn[$key])) {
+      $full = restoredJpeg($photosIn[$key]['Full'] ?? null);
+      $thumb = restoredJpeg($photosIn[$key]['Thumb'] ?? null);
+      if ($full !== null && $thumb !== null) {
+        $new = bin2hex(random_bytes(16));
+        file_put_contents(photoPath($new, false), $full);
+        file_put_contents(photoPath($new, true), $thumb);
+        $written[] = $new;
+        $usedKeys[] = $new;
+        return $new;
+      }
+    }
+    if (is_file(photoPath($key, false)) && is_file(photoPath($key, true))) {
+      $usedKeys[] = $key;
+      return $key;
+    }
+    return null;
+  };
+
+  $oldKeys = array_merge(
+    array_column(q('SELECT photo_key FROM pl_people WHERE user_id = ? AND photo_key IS NOT NULL', 'i', [$userId]), 'photo_key'),
+    array_column(q('SELECT ph.photo_key FROM pl_journal_photos ph JOIN pl_journal_entries e ON e.id = ph.entry_id WHERE e.user_id = ?', 'i', [$userId]), 'photo_key')
+  );
+  $counts = ['People' => 0, 'Groups' => 0, 'Households' => 0, 'Relationships' => 0, 'Activities' => 0, 'Journal' => 0];
+  $conn = db();
+  $conn->begin_transaction();
+  try {
+    // Out with the old (children cascade).
+    exec1('DELETE FROM pl_people WHERE user_id = ?', 'i', [$userId]);
+    exec1('DELETE FROM pl_groups WHERE user_id = ?', 'i', [$userId]);
+    exec1('DELETE FROM pl_households WHERE user_id = ?', 'i', [$userId]);
+    exec1('DELETE FROM pl_activities WHERE user_id = ?', 'i', [$userId]);
+
+    $gMap = [];
+    foreach ((array)($d['Groups'] ?? []) as $g) {
+      $name = $str($g['Name'] ?? null, 100);
+      if ($name === null || isset($gMap['n:' . strtolower($name)])) {
+        continue;
+      }
+      $color = is_string($g['Color'] ?? null) && preg_match('/^#[0-9a-fA-F]{6}$/', $g['Color']) ? strtolower($g['Color']) : null;
+      $gMap[(int)($g['Id'] ?? 0)] = exec1('INSERT INTO pl_groups (user_id, name, description, color, icon, is_archived) VALUES (?, ?, ?, ?, ?, ?)',
+        'issssi', [$userId, $name, $str($g['Description'] ?? null, 2000), $color, $str($g['Icon'] ?? null, 16), !empty($g['Archived']) ? 1 : 0]);
+      $gMap['n:' . strtolower($name)] = true;
+      $counts['Groups']++;
+    }
+    $hMap = [];
+    foreach ((array)($d['Households'] ?? []) as $h) {
+      $name = $str($h['Name'] ?? null, 100);
+      if ($name === null) {
+        continue;
+      }
+      $hMap[(int)($h['Id'] ?? 0)] = exec1('INSERT INTO pl_households (user_id, name, street, city, region, postal_code, country, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        'isssssss', [$userId, $name, $str($h['Street'] ?? null, 255), $str($h['City'] ?? null, 100), $str($h['Region'] ?? null, 100),
+                     $str($h['PostalCode'] ?? null, 20), $str($h['Country'] ?? null, 100), $str($h['Phone'] ?? null, 40)]);
+      $counts['Households']++;
+    }
+    $pMap = [];
+    foreach ((array)($d['People'] ?? []) as $p) {
+      $rec = normalizeRecord([
+        'firstName' => $p['FirstName'] ?? null, 'middleName' => $p['MiddleName'] ?? null, 'lastName' => $p['LastName'] ?? null,
+        'nickname' => $p['Nickname'] ?? null, 'organization' => $p['Organization'] ?? null, 'jobTitle' => $p['JobTitle'] ?? null,
+        'notes' => $p['Notes'] ?? null, 'pinned' => !empty($p['Pinned']),
+        'phones' => array_map(fn($x) => ['label' => $x['Label'] ?? null, 'value' => $x['Value'] ?? null], (array)($p['Phones'] ?? [])),
+        'emails' => array_map(fn($x) => ['label' => $x['Label'] ?? null, 'value' => $x['Value'] ?? null], (array)($p['Emails'] ?? [])),
+        'addresses' => array_map(fn($a) => ['label' => $a['Label'] ?? null, 'street' => $a['Street'] ?? null, 'city' => $a['City'] ?? null,
+          'region' => $a['Region'] ?? null, 'postalCode' => $a['PostalCode'] ?? null, 'country' => $a['Country'] ?? null], (array)($p['Addresses'] ?? [])),
+      ]);
+      if ($rec === null) {
+        continue;
+      }
+      $rec['birthday'] = $part($p['Birthday'] ?? null);
+      $rec['anniversary'] = $part($p['Anniversary'] ?? null);
+      $newId = createFromRecord($userId, $rec);
+      $status = in_array($p['Status'] ?? '', STATUSES, true) ? $p['Status'] : 'active';
+      $interval = isset($p['ContactIntervalDays']) && (int)$p['ContactIntervalDays'] >= 1 && (int)$p['ContactIntervalDays'] <= 3660 ? (int)$p['ContactIntervalDays'] : null;
+      $hh = isset($p['HouseholdId']) ? ($hMap[(int)$p['HouseholdId']] ?? null) : null;
+      exec1('UPDATE pl_people SET occupation = ?, status = ?, contact_interval_days = ?, follow_up_date = ?, household_id = ?, photo_key = ? WHERE id = ?',
+            'ssisisi', [$str($p['Occupation'] ?? null, 150), $status, $interval, $date($p['FollowUpDate'] ?? null), $hh, $photoKey($p['PhotoKey'] ?? null), $newId]);
+      foreach ((array)($p['GroupIds'] ?? []) as $gid) {
+        if (isset($gMap[(int)$gid]) && is_int($gMap[(int)$gid])) {
+          exec1('INSERT IGNORE INTO pl_group_members (group_id, person_id) VALUES (?, ?)', 'ii', [$gMap[(int)$gid], $newId]);
+        }
+      }
+      $pMap[(int)($p['Id'] ?? 0)] = $newId;
+      $counts['People']++;
+    }
+    foreach ((array)($d['Relationships'] ?? []) as $r) {
+      $a = $pMap[(int)($r['PersonId'] ?? 0)] ?? null;
+      $b = $pMap[(int)($r['RelatedId'] ?? 0)] ?? null;
+      $kind = $r['Kind'] ?? '';
+      if (!$a || !$b || $a === $b || !in_array($kind, RELATIONSHIP_KINDS, true)) {
+        continue;
+      }
+      exec1('INSERT IGNORE INTO pl_relationships (user_id, person_id, related_person_id, kind, label) VALUES (?, ?, ?, ?, ?)',
+            'iiiss', [$userId, $a, $b, $kind, $kind === 'other' ? $str($r['Label'] ?? null, 60) : null]);
+      $counts['Relationships']++;
+    }
+    $aMap = [];
+    foreach ((array)($d['Activities'] ?? []) as $a) {
+      $title = $str($a['Title'] ?? null, 200);
+      $day = $date($a['Date'] ?? null);
+      if ($title === null || $day === null) {
+        continue;
+      }
+      $t = fn($v) => is_string($v) && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $v) ? $v : null;
+      $status = in_array($a['Status'] ?? '', ACTIVITY_STATUSES, true) ? $a['Status'] : 'planned';
+      $aid = exec1('INSERT INTO pl_activities (user_id, title, activity_date, start_time, end_time, location, notes, status, journaled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'isssssssi', [$userId, $title, $day, $t($a['StartTime'] ?? null), $t($a['EndTime'] ?? null), $str($a['Location'] ?? null, 255),
+                      $str($a['Notes'] ?? null, 65000), $status, !empty($a['Journaled']) ? 1 : 0]);
+      foreach ((array)($a['ParticipantIds'] ?? []) as $pid) {
+        if (isset($pMap[(int)$pid])) {
+          exec1('INSERT IGNORE INTO pl_activity_participants (activity_id, person_id) VALUES (?, ?)', 'ii', [$aid, $pMap[(int)$pid]]);
+        }
+      }
+      $aMap[(int)($a['Id'] ?? 0)] = $aid;
+      $counts['Activities']++;
+    }
+    foreach ((array)($d['Journal'] ?? []) as $e) {
+      $pid = $pMap[(int)($e['PersonId'] ?? 0)] ?? null;
+      $day = $date($e['Date'] ?? null);
+      if (!$pid || $day === null) {
+        continue;
+      }
+      $kind = in_array($e['Kind'] ?? '', JOURNAL_KINDS, true) ? $e['Kind'] : 'other';
+      $actId = isset($e['ActivityId']) ? ($aMap[(int)$e['ActivityId']] ?? null) : null;
+      $eid = exec1('INSERT INTO pl_journal_entries (user_id, person_id, entry_date, kind, body, follow_up_date, activity_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'iissssi', [$userId, $pid, $day, $kind, $str($e['Body'] ?? null, 65000), $date($e['FollowUpDate'] ?? null), $actId]);
+      foreach ((array)($e['Photos'] ?? []) as $ph) {
+        $key = $photoKey($ph['Key'] ?? null);
+        if ($key) {
+          exec1('INSERT INTO pl_journal_photos (entry_id, photo_key) VALUES (?, ?)', 'is', [$eid, $key]);
+        }
+      }
+      $counts['Journal']++;
+    }
+    $conn->commit();
+  } catch (Throwable $ex) {
+    $conn->rollback();
+    foreach ($written as $key) {
+      deletePhotoFiles($key);
+    }
+    fail('The restore didn\'t finish, so nothing was changed: ' . $ex->getMessage(), 500);
+  }
+  // Old photo files the restored data no longer points at.
+  foreach (array_unique($oldKeys) as $key) {
+    if (!in_array($key, $usedKeys, true)) {
+      deletePhotoFiles($key);
+    }
+  }
+  return $counts;
+}
+
 // ---- Router ----
 
 $method = $_SERVER['REQUEST_METHOD'];
@@ -1623,6 +1940,58 @@ switch ($action) {
   case 'completeActivity': {
     $uid = member();
     respond(['ok' => true, 'JournalEntries' => completeActivity($uid, (int)($body['id'] ?? 0), !empty($body['logToJournal']))]);
+  }
+
+  // ---- Milestone D ----
+
+  // GET ?action=backup[&photos=1] -- everything this user owns, as one file.
+  case 'backup': {
+    $uid = member();
+    respond(backupData($uid, ($_GET['photos'] ?? '') === '1'));
+  }
+
+  // { confirm: 'REPLACE', data: <backup> } -- replaces ALL of this user's data.
+  case 'restore': {
+    $uid = member();
+    if (($body['confirm'] ?? '') !== 'REPLACE') {
+      fail('Restoring replaces everything -- confirm first');
+    }
+    respond(['ok' => true, 'Restored' => restoreData($uid, (array)($body['data'] ?? []))]);
+  }
+
+  // { keepId, mergeId }
+  case 'mergePeople': {
+    $uid = member();
+    mergePeople($uid, (int)($body['keepId'] ?? 0), (int)($body['mergeId'] ?? 0));
+    respond(['ok' => true]);
+  }
+
+  // { ids: [...], intervalDays: null | 1..3660 } -- Stay in touch for many at once.
+  case 'setContactInterval': {
+    $uid = member();
+    $days = $body['intervalDays'] ?? null;
+    $days = $days === null || $days === '' ? null : (int)$days;
+    if ($days !== null && ($days < 1 || $days > 3660)) {
+      fail('Pick how often, between 1 day and 10 years');
+    }
+    $ids = ownedIds($uid, 'pl_people', (array)($body['ids'] ?? []));
+    $n = $ids ? execCount('UPDATE pl_people SET contact_interval_days = ? WHERE user_id = ? AND id IN (' . placeholders($ids) . ')',
+                          'ii' . str_repeat('i', count($ids)), array_merge([$days, $uid], $ids)) : 0;
+    respond(['ok' => true, 'Changed' => $n]);
+  }
+
+  // GET ?action=journalSummary&from=YYYY-MM-DD -- counts for the Contact summary report.
+  case 'journalSummary': {
+    $uid = member();
+    $from = dateOrNull($_GET['from'] ?? null, 'from') ?? date('Y-m-d', strtotime('-12 months'));
+    respond([
+      'ByMonth' => array_map(fn($r) => ['Month' => $r['m'], 'Kind' => $r['kind'], 'Count' => (int)$r['n']],
+        q("SELECT DATE_FORMAT(entry_date, '%Y-%m') AS m, kind, COUNT(*) AS n FROM pl_journal_entries
+           WHERE user_id = ? AND entry_date >= ? GROUP BY m, kind ORDER BY m", 'is', [$uid, $from])),
+      'ByPerson' => array_map(fn($r) => ['PersonId' => (int)$r['person_id'], 'Count' => (int)$r['n']],
+        q('SELECT person_id, COUNT(*) AS n FROM pl_journal_entries WHERE user_id = ? AND entry_date >= ? GROUP BY person_id ORDER BY n DESC',
+          'is', [$uid, $from])),
+    ]);
   }
 
   case 'login': {
