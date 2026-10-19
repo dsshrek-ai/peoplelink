@@ -76,6 +76,16 @@ ok(r.status === 400, 'month without day refused');
 r = await post(alice, 'savePerson', { firstName: 'X', emails: [{ value: 'nope' }] });
 ok(r.status === 400, 'bad email refused');
 
+// phone numbers are stored in one format
+r = await post(alice, 'savePerson', { firstName: 'Phones', phones: [
+  { label: 'mobile', value: '801-261-2586' }, { label: 'home', value: '1 (801) 261-2587' }, { label: 'work', value: '+1 801.261.2588' },
+  { label: 'main', value: '801 261 2589 ext 12' }, { label: 'other', value: '+44 20 7946 0958' }, { label: 'other', value: '2612590' },
+  { label: 'other', value: 'ask for Bob' }, { label: 'other', value: '12345' } ] });
+const fmt = (await get(alice, 'person', { id: r.data.Id })).data.Person.Phones.map(x => x.Value);
+ok(JSON.stringify(fmt) === JSON.stringify(['(801) 261-2586', '(801) 261-2587', '(801) 261-2588', '(801) 261-2589 x12',
+  '+44 20 7946 0958', '261-2590', 'ask for Bob', '12345']), 'phones formatted ' + JSON.stringify(fmt));
+await post(alice, 'deletePeople', { ids: [r.data.Id] });
+
 // list excludes notes
 let list = (await get(alice, 'people')).data;
 ok(list.People.length === 2 && list.People.every(x => !('Notes' in x)), 'list has no notes');

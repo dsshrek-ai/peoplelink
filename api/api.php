@@ -231,6 +231,32 @@ const EMAIL_LABELS = ['home', 'work', 'other'];
 const ADDRESS_LABELS = ['home', 'work', 'other'];
 const STATUSES = ['active', 'archived', 'deceased'];
 
+// US-style numbers are stored one way: (801) 555-1234. A leading 1 is
+// dropped, an extension is kept (" x12"); international (+44 ...) numbers,
+// anything with words in it, and odd lengths are left as typed.
+function formatPhone(string $v): string {
+  $v = trim(preg_replace('/\s+/u', ' ', str_replace("\u{00A0}", ' ', $v)));
+  $ext = '';
+  if (preg_match('/^(.*?\d)\s*(?:ext\.?|extension|x|#)\s*(\d{1,6})$/i', $v, $m)) {
+    $v = $m[1];
+    $ext = ' x' . $m[2];
+  }
+  if (preg_match('/[A-Za-z]/', $v) || (strpos($v, '+') === 0 && strpos($v, '+1') !== 0)) {
+    return $v . $ext;
+  }
+  $d = preg_replace('/\D/', '', $v);
+  if (strlen($d) === 11 && $d[0] === '1') {
+    $d = substr($d, 1);
+  }
+  if (strlen($d) === 10) {
+    return '(' . substr($d, 0, 3) . ') ' . substr($d, 3, 3) . '-' . substr($d, 6) . $ext;
+  }
+  if (strlen($d) === 7) {
+    return substr($d, 0, 3) . '-' . substr($d, 3) . $ext;
+  }
+  return $v . $ext;
+}
+
 function labelOrOther($v, array $allowed): string {
   $v = strtolower(trim((string)($v ?? '')));
   return in_array($v, $allowed, true) ? $v : 'other';
@@ -386,7 +412,7 @@ function savePerson(int $userId, array $b): int {
       if ($kind === 'email' && strpos($value, '@') === false) {
         fail("\"$value\" doesn't look like an email address");
       }
-      $methods[] = [$kind, labelOrOther($row['label'] ?? null, $kind === 'phone' ? PHONE_LABELS : EMAIL_LABELS), $value];
+      $methods[] = [$kind, labelOrOther($row['label'] ?? null, $kind === 'phone' ? PHONE_LABELS : EMAIL_LABELS), $kind === 'phone' ? formatPhone($value) : $value];
     }
   }
   $addresses = [];
@@ -633,7 +659,7 @@ function normalizeRecord(array $r): ?array {
   foreach ((array)($r['phones'] ?? []) as $x) {
     $v = strOrNull($x['value'] ?? null, 255);
     if ($v !== null) {
-      $out['phones'][] = [labelOrOther($x['label'] ?? null, PHONE_LABELS), $v];
+      $out['phones'][] = [labelOrOther($x['label'] ?? null, PHONE_LABELS), formatPhone($v)];
     }
   }
   foreach ((array)($r['emails'] ?? []) as $x) {
@@ -1183,7 +1209,7 @@ function saveHousehold(int $userId, array $b): int {
   }
   $name = strOrNull($b['name'] ?? null, 100) ?? fail('Give the household a name, like "The Smiths"');
   $vals = [$name, strOrNull($b['street'] ?? null, 255), strOrNull($b['city'] ?? null, 100), strOrNull($b['region'] ?? null, 100),
-           strOrNull($b['postalCode'] ?? null, 20), strOrNull($b['country'] ?? null, 100), strOrNull($b['phone'] ?? null, 40)];
+           strOrNull($b['postalCode'] ?? null, 20), strOrNull($b['country'] ?? null, 100), ($ph = strOrNull($b['phone'] ?? null, 40)) === null ? null : formatPhone($ph)];
   if ($id > 0) {
     exec1('UPDATE pl_households SET name = ?, street = ?, city = ?, region = ?, postal_code = ?, country = ?, phone = ? WHERE id = ? AND user_id = ?',
           'sssssssii', array_merge($vals, [$id, $userId]));

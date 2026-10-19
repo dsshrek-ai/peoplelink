@@ -77,7 +77,7 @@ let d = await person(alice, keep);
 let p = d.Person;
 ok((await get(alice, 'person', { id: dupe })).status === 404, 'merged person gone');
 ok(p.FirstName === 'Robert' && p.Nickname === 'Bobby', 'keeps name, fills blank nickname');
-ok(p.Phones.length === 2 && p.Phones.some(x => x.Value === '801-555-2222'), 'phones combined without duplicate');
+ok(p.Phones.length === 2 && p.Phones.some(x => x.Value === '(801) 555-2222'), 'phones combined without duplicate');
 ok(p.Emails.length === 1 && p.Addresses.length === 1, 'email + address moved');
 ok(p.Birthday && p.Birthday.Year === 1970, 'birthday filled');
 ok(p.Notes === 'keep note\n\ndupe note', 'notes appended');

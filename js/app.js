@@ -478,3 +478,23 @@ async function uploadJournalPhoto(entryId, file) {
   fd.set('thumb', thumb, 'thumb.jpg');
   return postForm('addJournalPhoto', fd);
 }
+
+// Same rule as formatPhone() in api.php -- the server has the final say;
+// this just shows the tidy version as soon as you leave the box.
+function formatPhone(v) {
+  v = String(v || '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+  let ext = '';
+  const m = v.match(/^(.*?\d)\s*(?:ext\.?|extension|x|#)\s*(\d{1,6})$/i);
+  if (m) { v = m[1]; ext = ' x' + m[2]; }
+  if (/[A-Za-z]/.test(v) || (v.startsWith('+') && !v.startsWith('+1'))) return v + ext;
+  let d = v.replace(/\D/g, '');
+  if (d.length === 11 && d[0] === '1') d = d.slice(1);
+  if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}${ext}`;
+  if (d.length === 7) return `${d.slice(0, 3)}-${d.slice(3)}${ext}`;
+  return v + ext;
+}
+
+document.addEventListener('focusout', e => {
+  const el = e.target;
+  if (el && el.matches && el.matches('input[type=tel]') && el.value.trim()) el.value = formatPhone(el.value);
+});
