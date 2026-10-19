@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Groups · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page" id="content">Loading&hellip;</main>
+<dialog id="group-dlg" aria-label="Group"></dialog>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/app.js?v=1"></script>
+<script src="js/groups.js?v=1"></script>
+<script>
+renderNav('groups.html');
+const contentEl = document.getElementById('content');
+let GROUPS = [];
+let showArchived = false;
+
+function card(g) {
+  return `<li><a class="group-card${g.Archived ? ' archived' : ''}" href="group.html?id=${g.Id}" style="--gc:${escapeHtml(g.Color || '#0f766e')}">
+    <div class="gname">${g.Icon ? escapeHtml(g.Icon) + ' ' : ''}${escapeHtml(g.Name)}${g.Archived ? ' <span class="badge">archived</span>' : ''}</div>
+    <div class="small muted">${g.MemberCount} ${g.MemberCount === 1 ? 'person' : 'people'}</div>
+    ${g.Description ? `<div class="gdesc">${escapeHtml(g.Description)}</div>` : ''}
+  </a></li>`;
+}
+
+function render() {
+  const active = GROUPS.filter(g => !g.Archived);
+  const archived = GROUPS.filter(g => g.Archived);
+  contentEl.innerHTML = `
+    <div class="card-head"><h1 class="page-title" style="margin:0">Groups</h1><button type="button" class="btn small" id="new-btn">+ New group</button></div>
+    <p class="muted">A person can be in as many groups as you like. Removing someone from a group never deletes them.</p>
+    ${active.length ? `<ul class="group-list">${active.map(card).join('')}</ul>` : '<div class="card"><p class="empty">No groups yet. Make one for Family, Neighbors, Choir — whatever helps.</p></div>'}
+    ${archived.length ? `
+      <p style="margin-top:1.2rem"><button type="button" class="btn secondary small" id="arch-btn">${showArchived ? 'Hide' : 'Show'} ${archived.length} archived</button></p>
+      ${showArchived ? `<ul class="group-list">${archived.map(card).join('')}</ul>` : ''}` : ''}`;
+  document.getElementById('new-btn').addEventListener('click', () => openGroupDialog(null, id => { window.location.href = `group.html?id=${id}`; }));
+  const ab = document.getElementById('arch-btn');
+  if (ab) ab.addEventListener('click', () => { showArchived = !showArchived; render(); });
+}
+
+(async () => {
+  try {
+    GROUPS = (await fetchData('bootstrap')).Groups;
+    render();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>

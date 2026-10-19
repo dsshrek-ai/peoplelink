@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>About · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow">
+  <div class="card about-hero">
+    <div class="logo" aria-hidden="true">🤝</div>
+    <h1 class="page-title" style="margin:0.2rem 0">PeopleLink</h1>
+    <p class="tagline">More than contacts. It's about connections.</p>
+    <p class="small muted">Version <span id="version"></span></p>
+  </div>
+
+  <div class="card">
+    <h2>Our mission</h2>
+    <blockquote class="mission">People matter, and relationships deserve attention.</blockquote>
+    <p>Life introduces us to family, friends, neighbors, coworkers, and others who become part of our journey. Our mission is to provide a simple, thoughtful way to organize the people in our lives, remember the things that matter to them, and nurture meaningful relationships.</p>
+    <p>PeopleLink goes beyond names, addresses, and phone numbers. It helps us remember conversations, celebrate milestones, stay connected, and make time for the people who enrich our lives.</p>
+    <p><strong>Because the most important things we keep track of aren't things at all. They're people.</strong></p>
+  </div>
+
+  <div class="card">
+    <h2>What it does</h2>
+    <ul>
+      <li>Keeps everyone in one private place — names, phones, emails, addresses, birthdays, photos and notes.</li>
+      <li>Organizes people into as many groups as you like.</li>
+      <li>Finds anyone fast by name, number, email, place or group.</li>
+      <li>Reminds you of birthdays and anniversaries coming up.</li>
+      <li>One tap to call, text, email, map, or add a birthday to your calendar.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>What's new</h2>
+    <p><strong>0.1.0 — Milestone A</strong> (October 2026): people with photos and multiple phones, emails and addresses; groups; search and filters; pinned people; birthdays and anniversaries on the Dashboard; Help and About.</p>
+  </div>
+
+  <div class="card about-hero">
+    <p style="margin:0"><strong>Created and Developed by Dennis Senior</strong></p>
+    <p class="small muted" style="margin:0.3rem 0 0">© <span id="year"></span> Dennis Senior</p>
+  </div>
+</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/app.js?v=1"></script>
+<script>
+renderNav('about.html');
+document.getElementById('version').textContent = APP_VERSION;
+document.getElementById('year').textContent = Math.max(2026, new Date().getFullYear());
+</script>
+</body>
+</html>

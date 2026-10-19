@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Edit person · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/app.js?v=1"></script>
+<script>
+renderNav('people.html');
+const contentEl = document.getElementById('content');
+const personId = Number(qsParam('id')) || 0;
+const presetGroup = Number(qsParam('group')) || 0;
+
+const PHONE_LABELS = ['mobile', 'home', 'work', 'main', 'other'];
+const EMAIL_LABELS = ['home', 'work', 'other'];
+const ADDRESS_LABELS = ['home', 'work', 'other'];
+
+let P = null;          // the person being edited (null when adding)
+let GROUPS = [];
+let photoFile = null;  // a newly chosen photo, uploaded after Save
+let removePhoto = false;
+
+// ---- photo resize (browser does the decoding, so iPhone HEIC works) ----
+function resizeImageFile(file, maxSide, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      // Square-crop from the center so portraits fill the round avatar.
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const sx = (img.naturalWidth - side) / 2;
+      const sy = (img.naturalHeight - side) / 2;
+      const out = Math.min(maxSide, side);
+      const canvas = document.createElement('canvas');
+      canvas.width = out;
+      canvas.height = out;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, out, out);
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, out, out);
+      canvas.toBlob(b => (b ? resolve(b) : reject(new Error('Could not process that image.'))), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image file.')); };
+    img.src = url;
+  });
+}
+
+async function uploadPhoto(id, file) {
+  const [full, thumb] = await Promise.all([resizeImageFile(file, 800, 0.85), resizeImageFile(file, 240, 0.8)]);
+  const fd = new FormData();
+  fd.set('id', String(id));
+  fd.set('full', full, 'full.jpg');
+  fd.set('thumb', thumb, 'thumb.jpg');
+  return postForm('setPhoto', fd);
+}
+
+// ---- repeatable rows ----
+function labelSelect(labels, value) {
+  return `<select class="lbl" aria-label="Label">${labels.map(l => `<option value="${l}" ${l === value ? 'selected' : ''}>${labelText(l)}</option>`).join('')}</select>`;
+}
+
+function methodRow(kind, item) {
+  const labels = kind === 'phone' ? PHONE_LABELS : EMAIL_LABELS;
+  const type = kind === 'phone' ? 'tel' : 'email';
+  const ph = kind === 'phone' ? 'Phone number' : 'Email address';
+  return `<div class="multi-row" data-kind="${kind}">
+    ${labelSelect(labels, (item && item.Label) || (kind === 'phone' ? 'mobile' : 'home'))}
+    <input type="${type}" class="val" value="${escapeHtml(item ? item.Value : '')}" placeholder="${ph}" aria-label="${ph}">
+    <button type="button" class="icon-btn" data-remove aria-label="Remove">✕</button>
+  </div>`;
+}
+
+function addressBlock(a) {
+  a = a || {};
+  return `<div class="addr-block" data-kind="address">
+    <div class="multi-row" style="grid-template-columns: 7.5rem 1fr auto;">
+      ${labelSelect(ADDRESS_LABELS, a.Label || 'home')}<span></span>
+      <button type="button" class="icon-btn" data-remove aria-label="Remove address">✕</button>
+    </div>
+    <label>Street</label><textarea class="street" rows="2" style="min-height:3rem">${escapeHtml(a.Street || '')}</textarea>
+    <div class="row3">
+      <div><label>City</label><input type="text" class="city" value="${escapeHtml(a.City || '')}"></div>
+      <div><label>State / region</label><input type="text" class="region" value="${escapeHtml(a.Region || '')}"></div>
+      <div><label>Postal code</label><input type="text" class="postal" value="${escapeHtml(a.PostalCode || '')}"></div>
+    </div>
+    <label>Country</label><input type="text" class="country" value="${escapeHtml(a.Country || '')}">
+  </div>`;
+}
+
+function dateInputs(prefix, d) {
+  d = d || {};
+  return `<div class="date-row">
+    <select id="${prefix}-m" aria-label="Month"><option value="">Month</option>${MONTHS.map((m, i) => `<option value="${i + 1}" ${d.Month === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select>
+    <input type="number" id="${prefix}-d" min="1" max="31" placeholder="Day" value="${d.Day || ''}" aria-label="Day">
+    <input type="number" id="${prefix}-y" min="1800" max="2100" placeholder="Year" value="${d.Year || ''}" aria-label="Year">
+  </div>`;
+}
+
+function readDate(prefix) {
+  const v = id => document.getElementById(`${prefix}-${id}`).value.trim();
+  return { month: v('m'), day: v('d'), year: v('y') };
+}
+
+function render() {
+  const p = P || { Phones: [], Emails: [], Addresses: [], GroupIds: presetGroup ? [presetGroup] : [] };
+  const groupList = GROUPS.filter(g => !g.Archived || p.GroupIds.includes(g.Id));
+  contentEl.innerHTML = `
+    <p class="small"><a href="${P ? `person.html?id=${P.Id}` : 'people.html'}">← ${P ? escapeHtml(displayName(P)) : 'People'}</a></p>
+    <h1 class="page-title">${P ? 'Edit ' + escapeHtml(displayName(P)) : 'Add a person'}</h1>
+    <form id="form" novalidate>
+      <div class="card">
+        <div class="profile-head">
+          <span id="photo-preview">${avatarHtml(P || { Id: 0, FirstName: '?' }, 'lg')}</span>
+          <div class="btn-row">
+            <label class="btn secondary" style="margin:0">📷 ${P && P.PhotoKey ? 'Change photo' : 'Add photo'}<input type="file" id="photo-input" accept="image/*" hidden></label>
+            ${P && P.PhotoKey ? '<button type="button" class="btn danger small" id="photo-remove">Remove photo</button>' : ''}
+          </div>
+        </div>
+        <div class="row2">
+          <div><label for="f-first">First name</label><input type="text" id="f-first" value="${escapeHtml(p.FirstName || '')}" autocomplete="off"></div>
+          <div><label for="f-last">Last name</label><input type="text" id="f-last" value="${escapeHtml(p.LastName || '')}" autocomplete="off"></div>
+        </div>
+        <div class="row2">
+          <div><label for="f-nick">Preferred name / nickname</label><input type="text" id="f-nick" value="${escapeHtml(p.Nickname || '')}"></div>
+          <div><label for="f-middle">Middle name</label><input type="text" id="f-middle" value="${escapeHtml(p.MiddleName || '')}"></div>
+        </div>
+      </div>
+
+      <fieldset><legend>Phones</legend><div id="phones">${p.Phones.map(x => methodRow('phone', x)).join('')}</div>
+        <p><button type="button" class="btn secondary small" data-add="phone">+ Add phone</button></p></fieldset>
+      <fieldset><legend>Emails</legend><div id="emails">${p.Emails.map(x => methodRow('email', x)).join('')}</div>
+        <p><button type="button" class="btn secondary small" data-add="email">+ Add email</button></p></fieldset>
+      <fieldset><legend>Addresses</legend><div id="addresses">${p.Addresses.map(addressBlock).join('')}</div>
+        <p><button type="button" class="btn secondary small" data-add="address">+ Add address</button></p></fieldset>
+
+      <fieldset><legend>Dates</legend>
+        <label>Birthday</label>${dateInputs('bd', p.Birthday)}
+        <label>Anniversary</label>${dateInputs('an', p.Anniversary)}
+      </fieldset>
+
+      <fieldset><legend>Work</legend>
+        <div class="row2">
+          <div><label for="f-org">Organization</label><input type="text" id="f-org" value="${escapeHtml(p.Organization || '')}"></div>
+          <div><label for="f-title">Job title</label><input type="text" id="f-title" value="${escapeHtml(p.JobTitle || '')}"></div>
+        </div>
+        <label for="f-occ">Occupation</label><input type="text" id="f-occ" value="${escapeHtml(p.Occupation || '')}">
+      </fieldset>
+
+      <fieldset><legend>Groups</legend>
+        ${groupList.length ? `<div class="check-grid">${groupList.map(g => `
+          <label class="inline"><input type="checkbox" class="grp" value="${g.Id}" ${p.GroupIds.includes(g.Id) ? 'checked' : ''}> ${g.Icon ? escapeHtml(g.Icon) + ' ' : ''}${escapeHtml(g.Name)}</label>`).join('')}</div>`
+          : '<p class="empty">No groups yet — you can create them on the <a href="groups.html">Groups</a> page.</p>'}
+      </fieldset>
+
+      <fieldset><legend>Notes</legend>
+        <textarea id="f-notes" rows="4" placeholder="Anything worth remembering — kids' names, favorite things, how you met…">${escapeHtml(p.Notes || '')}</textarea>
+        <p class="muted small" style="margin:0.3rem 0 0">Private to you — never shared with others or included in exports.</p>
+      </fieldset>
+
+      <div id="form-err"></div>
+      <div class="btn-row" style="margin-top:1rem; justify-content:flex-end">
+        <a class="btn secondary" href="${P ? `person.html?id=${P.Id}` : 'people.html'}">Cancel</a>
+        <button type="submit" class="btn" id="save-btn">Save</button>
+      </div>
+    </form>`;
+
+  // A new person starts with one empty phone and email row to fill in.
+  if (!P) {
+    document.getElementById('phones').insertAdjacentHTML('beforeend', methodRow('phone'));
+    document.getElementById('emails').insertAdjacentHTML('beforeend', methodRow('email'));
+  }
+
+  const form = document.getElementById('form');
+  form.addEventListener('click', e => {
+    const add = e.target.closest('[data-add]');
+    if (add) {
+      const kind = add.dataset.add;
+      const box = document.getElementById(kind === 'phone' ? 'phones' : kind === 'email' ? 'emails' : 'addresses');
+      box.insertAdjacentHTML('beforeend', kind === 'address' ? addressBlock() : methodRow(kind));
+      const inputs = box.lastElementChild.querySelectorAll('input, textarea');
+      if (inputs[0]) inputs[0].focus();
+    }
+    const rm = e.target.closest('[data-remove]');
+    if (rm) rm.closest('[data-kind]').remove();
+  });
+  form.addEventListener('submit', e => { e.preventDefault(); save(); });
+
+  document.getElementById('photo-input').addEventListener('change', e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    photoFile = f;
+    removePhoto = false;
+    const url = URL.createObjectURL(f);
+    document.getElementById('photo-preview').innerHTML = `<img class="avatar avatar-lg" src="${url}" alt="">`;
+  });
+  const rmBtn = document.getElementById('photo-remove');
+  if (rmBtn) rmBtn.addEventListener('click', () => {
+    removePhoto = true;
+    photoFile = null;
+    document.getElementById('photo-preview').innerHTML = avatarHtml({ ...P, PhotoKey: null }, 'lg');
+    rmBtn.remove();
+  });
+  document.getElementById(P ? 'f-first' : 'f-first').focus();
+}
+
+function collect() {
+  const v = id => document.getElementById(id).value;
+  const methods = kind => [...document.querySelectorAll(`#${kind === 'phone' ? 'phones' : 'emails'} [data-kind="${kind}"]`)].map(r => ({
+    label: r.querySelector('.lbl').value, value: r.querySelector('.val').value.trim(),
+  })).filter(x => x.value);
+  const addresses = [...document.querySelectorAll('#addresses [data-kind="address"]')].map(b => ({
+    label: b.querySelector('.lbl').value,
+    street: b.querySelector('.street').value.trim(),
+    city: b.querySelector('.city').value.trim(),
+    region: b.querySelector('.region').value.trim(),
+    postalCode: b.querySelector('.postal').value.trim(),
+    country: b.querySelector('.country').value.trim(),
+  }));
+  return {
+    id: P ? P.Id : 0,
+    firstName: v('f-first'), lastName: v('f-last'), nickname: v('f-nick'), middleName: v('f-middle'),
+    organization: v('f-org'), jobTitle: v('f-title'), occupation: v('f-occ'),
+    notes: v('f-notes'),
+    phones: methods('phone'), emails: methods('email'), addresses,
+    birthday: readDate('bd'), anniversary: readDate('an'),
+    groupIds: [...document.querySelectorAll('.grp:checked')].map(i => Number(i.value)),
+  };
+}
+
+async function save() {
+  const errEl = document.getElementById('form-err');
+  errEl.innerHTML = '';
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  try {
+    const res = await postAction('savePerson', collect());
+    const id = res.Id;
+    if (photoFile) {
+      btn.textContent = 'Uploading photo…';
+      try {
+        await uploadPhoto(id, photoFile);
+      } catch (e) {
+        alert('Saved, but the photo didn\'t upload: ' + errorText(e, e.message));
+      }
+    } else if (removePhoto) {
+      await postAction('removePhoto', { id });
+    }
+    window.location.href = `person.html?id=${id}`;
+  } catch (e) {
+    errEl.innerHTML = `<p class="err">${escapeHtml(errorText(e, "Couldn't save. Please try again."))}</p>`;
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }
+}
+
+(async () => {
+  try {
+    if (personId) {
+      const data = await fetchData('person', { id: personId });
+      P = data.Person;
+      GROUPS = data.Groups;
+    } else {
+      const data = await fetchData('bootstrap');
+      GROUPS = data.Groups;
+    }
+    render();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>

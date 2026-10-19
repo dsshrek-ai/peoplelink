@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/app.js?v=1"></script>
+<script>
+renderNav('index.html');
+const contentEl = document.getElementById('content');
+
+function upcomingDates(people, days) {
+  const out = [];
+  people.forEach(p => {
+    if (p.Status !== 'active') return;
+    [['Birthday', '🎂', 'birthday'], ['Anniversary', '💍', 'anniversary']].forEach(([field, icon, word]) => {
+      const d = p[field];
+      if (!d) return;
+      const n = daysUntil(d);
+      if (n <= days) out.push({ p, d, n, icon, word, years: turning(d) });
+    });
+  });
+  return out.sort((a, b) => a.n - b.n || displayName(a.p).localeCompare(displayName(b.p)));
+}
+
+function dateLine(e) {
+  let what = e.word === 'birthday'
+    ? (e.years !== null ? `turns ${e.years}` : 'birthday')
+    : (e.years !== null ? `${e.years} year${e.years === 1 ? '' : 's'} married` : 'anniversary');
+  return `<li>
+    ${avatarHtml(e.p, 'sm')}
+    <a href="person.html?id=${e.p.Id}"><strong>${escapeHtml(displayName(e.p))}</strong>
+      <div class="small muted">${e.icon} ${escapeHtml(what)} · ${escapeHtml(MONTHS[e.d.Month - 1])} ${e.d.Day}</div></a>
+    <span class="when${e.n <= 7 ? ' soon' : ''}">${escapeHtml(whenLabel(e.n))}</span>
+  </li>`;
+}
+
+async function load() {
+  try {
+    const [boot, data] = await Promise.all([fetchData('bootstrap'), fetchData('people')]);
+    const people = data.People;
+    const active = people.filter(p => p.Status === 'active');
+    const pinned = active.filter(p => p.Pinned).sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
+    const dates = upcomingDates(people, 30);
+    const groups = data.Groups.filter(g => !g.Archived);
+
+    contentEl.innerHTML = `
+      <h1 class="page-title">Hello, ${escapeHtml(boot.DisplayName)}</h1>
+      ${people.length === 0 ? `
+        <div class="card">
+          <h2>Welcome to PeopleLink</h2>
+          <p>Start by adding the people in your life. You can put each person in as many groups as you like — Family, Neighbors, Choir, and so on.</p>
+          <div class="btn-row"><a class="btn" href="edit.html">+ Add a person</a><a class="btn secondary" href="help.html">How it works</a></div>
+        </div>` : ''}
+      <div class="dash-grid">
+        <div>
+          <div class="card">
+            <div class="card-head"><h2>⭐ Pinned</h2><a class="small" href="people.html?pinned=1">See all</a></div>
+            ${pinned.length ? `<div class="pin-grid">${pinned.map(p => `
+              <a href="person.html?id=${p.Id}">${avatarHtml(p, 'md')}<span>${escapeHtml(displayName(p))}</span></a>`).join('')}</div>`
+              : '<p class="empty">Tap the ☆ on someone\'s page to keep them here.</p>'}
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>🎉 Next 30 days</h2></div>
+            ${dates.length ? `<ul class="date-list">${dates.map(dateLine).join('')}</ul>`
+              : '<p class="empty">No birthdays or anniversaries in the next 30 days.</p>'}
+          </div>
+        </div>
+        <div>
+          <div class="card">
+            <div class="card-head"><h2>People</h2><a class="btn small" href="edit.html">+ Add</a></div>
+            <div class="stat">${active.length}</div>
+            <p class="muted small" style="margin:0.2rem 0 0.6rem;">active ${active.length === 1 ? 'person' : 'people'}${people.length > active.length ? ` · ${people.length - active.length} archived or deceased` : ''}</p>
+            <div class="btn-row"><a class="btn secondary" href="people.html">Browse people</a></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Groups</h2><a class="small" href="groups.html">Manage</a></div>
+            ${groups.length ? `<div class="chips">${groups.map(g => groupChip({ ...g, Name: `${g.Name} (${g.MemberCount})` }, `group.html?id=${g.Id}`)).join('')}</div>`
+              : '<p class="empty">No groups yet. <a href="groups.html">Create one</a> — like Family, Neighbors, or Choir.</p>'}
+          </div>
+        </div>
+      </div>`;
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+}
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>People · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/app.js?v=1"></script>
+<script>
+renderNav('people.html');
+const contentEl = document.getElementById('content');
+const SORT_KEY = 'plSort';
+
+let PEOPLE = [];
+let GROUPS = [];
+let selecting = false;
+const selected = new Set();
+
+// Filters start from the address (so Dashboard/Group links can pre-filter).
+const filters = {
+  q: qsParam('q') || '',
+  group: qsParam('group') || '',
+  status: qsParam('status') || 'active',
+  pinned: qsParam('pinned') === '1',
+  birthdays: qsParam('birthdays') === '1',
+  sort: (() => { try { return localStorage.getItem(SORT_KEY) || 'first'; } catch (e) { return 'first'; } })(),
+};
+
+function syncUrl() {
+  const p = new URLSearchParams();
+  if (filters.q) p.set('q', filters.q);
+  if (filters.group) p.set('group', filters.group);
+  if (filters.status !== 'active') p.set('status', filters.status);
+  if (filters.pinned) p.set('pinned', '1');
+  if (filters.birthdays) p.set('birthdays', '1');
+  const s = p.toString();
+  history.replaceState({}, '', 'people.html' + (s ? '?' + s : ''));
+}
+
+// Everything searchable about a person, lowercased; phone digits are added
+// so "8015551234" finds "(801) 555-1234".
+function haystack(p) {
+  const groupNames = p.GroupIds.map(id => (GROUPS.find(g => g.Id === id) || {}).Name).filter(Boolean);
+  return [
+    p.FirstName, p.MiddleName, p.LastName, p.Nickname, p.Organization, p.JobTitle, p.Occupation,
+    ...p.Phones.map(x => x.Value), ...p.Phones.map(x => dialable(x.Value)),
+    ...p.Emails.map(x => x.Value), ...p.Addresses.map(addressOneLine), ...groupNames,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function matches(p) {
+  if (filters.status !== 'all' && p.Status !== filters.status) return false;
+  if (filters.group === 'none' && p.GroupIds.length) return false;
+  if (filters.group && filters.group !== 'none' && !p.GroupIds.includes(Number(filters.group))) return false;
+  if (filters.pinned && !p.Pinned) return false;
+  if (filters.birthdays && !(p.Birthday && p.Birthday.Month === todayParts().Month)) return false;
+  if (filters.q) {
+    const hay = p._hay;
+    const qDigits = dialable(filters.q);
+    return filters.q.toLowerCase().split(/\s+/).filter(Boolean).every(w => hay.includes(w))
+      || (qDigits.length >= 3 && hay.includes(qDigits));
+  }
+  return true;
+}
+
+function subLine(p) {
+  const bits = [];
+  // An organization-only contact already shows the organization as its name.
+  const org = p.Organization && p.Organization !== displayName(p) ? p.Organization : '';
+  const job = [p.JobTitle, org].filter(Boolean).join(', ');
+  if (job) bits.push(job);
+  if (p.Phones[0]) bits.push(p.Phones[0].Value);
+  else if (p.Emails[0]) bits.push(p.Emails[0].Value);
+  if (filters.birthdays && p.Birthday) bits.unshift(`🎂 ${MONTHS[p.Birthday.Month - 1]} ${p.Birthday.Day}`);
+  return bits.join(' · ');
+}
+
+function renderShell() {
+  const groupOpts = GROUPS.filter(g => !g.Archived || String(g.Id) === filters.group)
+    .map(g => `<option value="${g.Id}" ${String(g.Id) === filters.group ? 'selected' : ''}>${escapeHtml(g.Name)}</option>`).join('');
+  const bulkGroupOpts = GROUPS.filter(g => !g.Archived).map(g => `<option value="${g.Id}">${escapeHtml(g.Name)}</option>`).join('');
+  contentEl.innerHTML = `
+    <div class="card-head"><h1 class="page-title" style="margin:0">People</h1>
+      <div class="btn-row"><button type="button" class="btn secondary small" id="select-btn">Select</button><a class="btn small" href="edit.html">+ Add person</a></div></div>
+    <div class="toolbar">
+      <input type="search" class="search" id="q" placeholder="Search names, phones, emails, places…" value="${escapeHtml(filters.q)}" aria-label="Search people">
+      <select id="f-group" aria-label="Group">
+        <option value="">All groups</option>
+        <option value="none" ${filters.group === 'none' ? 'selected' : ''}>Not in a group</option>
+        ${groupOpts}
+      </select>
+      <select id="f-status" aria-label="Status">
+        ${[['active', 'Active'], ['archived', 'Archived'], ['deceased', 'Deceased'], ['all', 'Everyone']].map(([v, l]) =>
+          `<option value="${v}" ${filters.status === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>
+      <label class="filter-toggle"><input type="checkbox" id="f-pinned" ${filters.pinned ? 'checked' : ''}> ⭐ Pinned</label>
+      <label class="filter-toggle"><input type="checkbox" id="f-bday" ${filters.birthdays ? 'checked' : ''}> 🎂 This month</label>
+    </div>
+    <div class="bulk-bar" id="bulk-bar">
+      <span class="count" id="bulk-count">0 selected</span>
+      <button type="button" class="btn secondary small" id="bulk-all">Select all shown</button>
+      <select id="bulk-group" aria-label="Group for selected people"><option value="">Group…</option>${bulkGroupOpts}</select>
+      <button type="button" class="btn secondary small" id="bulk-add">Add to group</button>
+      <button type="button" class="btn secondary small" id="bulk-remove">Remove from group</button>
+      <select id="bulk-status" aria-label="Status for selected people">
+        <option value="">Set status…</option><option value="active">Active</option><option value="archived">Archived</option><option value="deceased">Deceased</option>
+      </select>
+      <button type="button" class="btn secondary small" id="bulk-done">Done</button>
+    </div>
+    <div class="list-meta"><span id="count"></span>
+      <label class="inline small" style="margin:0">Sort by
+        <select id="f-sort" style="width:auto"><option value="first" ${filters.sort === 'first' ? 'selected' : ''}>First name</option><option value="last" ${filters.sort === 'last' ? 'selected' : ''}>Last name</option></select>
+      </label></div>
+    <ul class="person-list" id="list"></ul>`;
+
+  const on = (id, ev, fn) => document.getElementById(id).addEventListener(ev, fn);
+  on('q', 'input', e => { filters.q = e.target.value.trim(); syncUrl(); renderList(); });
+  on('f-group', 'change', e => { filters.group = e.target.value; syncUrl(); renderList(); });
+  on('f-status', 'change', e => { filters.status = e.target.value; syncUrl(); renderList(); });
+  on('f-pinned', 'change', e => { filters.pinned = e.target.checked; syncUrl(); renderList(); });
+  on('f-bday', 'change', e => { filters.birthdays = e.target.checked; syncUrl(); renderList(); });
+  on('f-sort', 'change', e => { filters.sort = e.target.value; try { localStorage.setItem(SORT_KEY, filters.sort); } catch (x) {} renderList(); });
+  on('select-btn', 'click', () => setSelecting(!selecting));
+  on('bulk-done', 'click', () => setSelecting(false));
+  on('bulk-all', 'click', () => { visible().forEach(p => selected.add(p.Id)); renderList(); });
+  on('bulk-add', 'click', () => bulkGroup('add'));
+  on('bulk-remove', 'click', () => bulkGroup('remove'));
+  on('bulk-status', 'change', e => bulkStatus(e.target));
+  document.getElementById('list').addEventListener('change', e => {
+    const box = e.target.closest('.select-box');
+    if (!box) return;
+    const id = Number(box.dataset.id);
+    if (box.checked) selected.add(id); else selected.delete(id);
+    updateBulkCount();
+  });
+}
+
+function visible() {
+  const by = filters.sort;
+  return PEOPLE.filter(matches).sort((a, b) => {
+    if (filters.birthdays) return (a.Birthday.Day - b.Birthday.Day) || sortKey(a, by).localeCompare(sortKey(b, by));
+    return sortKey(a, by).localeCompare(sortKey(b, by));
+  });
+}
+
+function renderList() {
+  const rows = visible();
+  document.getElementById('count').textContent = `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`;
+  const list = document.getElementById('list');
+  if (!PEOPLE.length) {
+    list.innerHTML = '<li class="person-row"><span class="empty">No one here yet. <a href="edit.html">Add your first person</a>.</span></li>';
+    return;
+  }
+  if (!rows.length) {
+    list.innerHTML = '<li class="person-row"><span class="empty">No one matches. Try clearing the search or filters.</span></li>';
+    return;
+  }
+  list.innerHTML = rows.map(p => `
+    <li class="person-row${p.Status !== 'active' ? ' archived' : ''}">
+      <input type="checkbox" class="select-box" data-id="${p.Id}" ${selected.has(p.Id) ? 'checked' : ''} aria-label="Select ${escapeHtml(displayName(p))}">
+      <a class="who" href="person.html?id=${p.Id}">
+        ${avatarHtml(p, 'sm')}
+        <span class="txt"><div class="name">${escapeHtml(displayName(p))}${p.Pinned ? ' <span title="Pinned">⭐</span>' : ''}${p.Status !== 'active' ? ` <span class="badge ${p.Status}">${p.Status}</span>` : ''}</div>
+        <div class="sub">${escapeHtml(subLine(p))}</div></span>
+      </a>
+    </li>`).join('');
+  updateBulkCount();
+}
+
+function setSelecting(on) {
+  selecting = on;
+  if (!on) selected.clear();
+  contentEl.classList.toggle('selecting', on);
+  document.getElementById('select-btn').textContent = on ? 'Cancel' : 'Select';
+  renderList();
+}
+
+function updateBulkCount() {
+  document.getElementById('bulk-count').textContent = `${selected.size} selected`;
+}
+
+async function bulkGroup(mode) {
+  const gid = Number(document.getElementById('bulk-group').value);
+  if (!gid) { showStatus('Choose a group first.', true); return; }
+  if (!selected.size) { showStatus('Select some people first.', true); return; }
+  const ids = [...selected];
+  try {
+    await postAction('groupMembers', { groupId: gid, add: mode === 'add' ? ids : [], remove: mode === 'remove' ? ids : [] });
+    const g = GROUPS.find(x => x.Id === gid);
+    showStatus(`${mode === 'add' ? 'Added' : 'Removed'} ${ids.length} ${mode === 'add' ? 'to' : 'from'} ${g ? g.Name : 'the group'}.`);
+    await reload();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't update the group."), true);
+  }
+}
+
+async function bulkStatus(sel) {
+  const status = sel.value;
+  sel.value = '';
+  if (!status) return;
+  if (!selected.size) { showStatus('Select some people first.', true); return; }
+  try {
+    const res = await postAction('setStatus', { ids: [...selected], status });
+    showStatus(`Marked ${res.Changed} as ${status}.`);
+    selected.clear();
+    await reload();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't change the status."), true);
+  }
+}
+
+async function reload() {
+  const data = await fetchData('people');
+  PEOPLE = data.People;
+  GROUPS = data.Groups;
+  PEOPLE.forEach(p => { p._hay = haystack(p); });
+  renderList();
+}
+
+(async () => {
+  try {
+    const data = await fetchData('people');
+    PEOPLE = data.People;
+    GROUPS = data.Groups;
+    PEOPLE.forEach(p => { p._hay = haystack(p); });
+    renderShell();
+    renderList();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Help · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow">
+  <h1 class="page-title">❓ Help / Instructions</h1>
+  <input type="search" id="help-q" placeholder="Search help…" aria-label="Search help topics">
+  <p class="muted small" id="help-none" hidden>No topics match. Try a simpler word, like "group" or "photo".</p>
+
+  <section class="card help-topic" id="getting-started">
+    <h2>Getting started</h2>
+    <ol>
+      <li>Open PeopleLink from <strong>My Apps Hub</strong> — it signs you in automatically.</li>
+      <li>Tap <strong>People</strong>, then <strong>+ Add person</strong>.</li>
+      <li>Type a name. Everything else is optional — add a phone, email, address, birthday or notes if you have them.</li>
+      <li>Tap <strong>Save</strong>. You'll see their page, with buttons to call, text, or email them.</li>
+    </ol>
+    <p>Everything you enter is private to your login. Other people using PeopleLink can't see your list.</p>
+  </section>
+
+  <section class="card help-topic" id="people">
+    <h2>Managing people</h2>
+    <ol>
+      <li><strong>Find someone:</strong> on <strong>People</strong>, type in the search box. It searches names, nicknames, phone numbers (with or without dashes), emails, addresses and group names.</li>
+      <li><strong>Filter:</strong> pick a group, choose Active / Archived / Deceased / Everyone, or tick <strong>⭐ Pinned</strong> or <strong>🎂 This month</strong>.</li>
+      <li><strong>Edit:</strong> open the person and tap <strong>✏️ Edit</strong>. Use <strong>+ Add phone</strong>, <strong>+ Add email</strong> or <strong>+ Add address</strong> for more than one; the ✕ removes one.</li>
+      <li><strong>Photo:</strong> in Edit, tap <strong>📷 Add photo</strong>. On a phone you can take a picture or choose one. It's trimmed to a square to fit the round picture.</li>
+      <li><strong>Birthday without a year:</strong> leave the year blank — reminders still work, the age just isn't shown.</li>
+      <li><strong>Pin:</strong> tap the ☆ next to their name to keep them on your Dashboard. Tap ★ to unpin.</li>
+      <li><strong>Add a birthday to your calendar:</strong> tap 📅 next to the birthday or anniversary on their page.</li>
+      <li><strong>Map an address:</strong> tap <strong>🗺️ Map</strong> next to it.</li>
+    </ol>
+  </section>
+
+  <section class="card help-topic" id="status">
+    <h2>Archive, deceased, and delete</h2>
+    <ul>
+      <li><strong>Archive</strong> hides someone from your lists and Dashboard without losing anything. Choose <strong>Archived</strong> in the People filter to see them, and <strong>Make active</strong> to bring them back.</li>
+      <li><strong>Mark deceased</strong> keeps their record and memories but stops birthday reminders.</li>
+      <li><strong>Delete</strong> removes the person and everything about them for good. It asks first.</li>
+    </ul>
+  </section>
+
+  <section class="card help-topic" id="groups">
+    <h2>Groups</h2>
+    <ol>
+      <li>Tap <strong>Groups</strong>, then <strong>+ New group</strong>. Give it a name, and if you like a color and an icon.</li>
+      <li>Open the group and tap <strong>+ Add people</strong> to tick everyone who belongs.</li>
+      <li>Or, on a person's page, tap <strong>Change</strong> under Groups.</li>
+      <li>A person can be in as many groups as you like.</li>
+      <li>The ✕ next to someone in a group only takes them out of that group — it never deletes them.</li>
+      <li><strong>Archive</strong> a group you don't use any more to hide it; <strong>Delete group</strong> removes just the group, never the people in it.</li>
+    </ol>
+  </section>
+
+  <section class="card help-topic" id="many">
+    <h2>Doing many at once</h2>
+    <ol>
+      <li>On <strong>People</strong>, tap <strong>Select</strong>.</li>
+      <li>Tick the people you want (or <strong>Select all shown</strong> after searching or filtering).</li>
+      <li>Choose a group and tap <strong>Add to group</strong> or <strong>Remove from group</strong> — or use <strong>Set status…</strong> to archive them.</li>
+      <li>Tap <strong>Done</strong> when you're finished.</li>
+    </ol>
+  </section>
+
+  <section class="card help-topic" id="dashboard">
+    <h2>The Dashboard</h2>
+    <ul>
+      <li><strong>⭐ Pinned</strong> shows the people you pinned.</li>
+      <li><strong>🎉 Next 30 days</strong> lists birthdays and anniversaries coming up, with how old they're turning when you know the year.</li>
+      <li><strong>Groups</strong> shows each group and how many people are in it — tap one to open it.</li>
+    </ul>
+  </section>
+
+  <section class="card help-topic" id="privacy">
+    <h2>Privacy</h2>
+    <p>Your people, groups, notes and photos belong to your login only. Notes are never shared with anyone and won't be included in exports.</p>
+  </section>
+
+  <section class="card help-topic" id="coming">
+    <h2>Coming next</h2>
+    <p>Still to come in version 0.1: importing and exporting Google Contacts, sharing a group with another PeopleLink user, a journal of conversations and visits, contact reminders, relationships and households, and planned activities. These instructions will be updated as each one arrives.</p>
+  </section>
+</main>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/app.js?v=1"></script>
+<script>
+renderNav('help.html');
+const topics = [...document.querySelectorAll('.help-topic')];
+document.getElementById('help-q').addEventListener('input', e => {
+  const words = e.target.value.toLowerCase().split(/\s+/).filter(Boolean);
+  let any = false;
+  topics.forEach(t => {
+    const show = words.every(w => t.textContent.toLowerCase().includes(w));
+    t.hidden = !show;
+    any = any || show;
+  });
+  document.getElementById('help-none').hidden = any;
+});
+</script>
+</body>
+</html>

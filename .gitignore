@@ -1,0 +1,4 @@
+api/config.php
+api/uploads/*
+!api/uploads/.htaccess
+node_modules/

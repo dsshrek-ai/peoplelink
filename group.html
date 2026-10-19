@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Group · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<dialog id="group-dlg" aria-label="Group"></dialog>
+<dialog id="add-dlg" aria-labelledby="ad-title"></dialog>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/app.js?v=1"></script>
+<script src="js/groups.js?v=1"></script>
+<script>
+renderNav('groups.html');
+const contentEl = document.getElementById('content');
+const groupId = Number(qsParam('id'));
+let G = null;
+let PEOPLE = [];
+
+function members() {
+  return PEOPLE.filter(p => p.GroupIds.includes(groupId))
+    .sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
+}
+
+function render() {
+  document.title = `${G.Name} · PeopleLink`;
+  const list = members();
+  const shown = list.filter(p => p.Status !== 'archived');
+  const hidden = list.length - shown.length;
+  contentEl.innerHTML = `
+    <p class="small"><a href="groups.html">← Groups</a></p>
+    <div class="card" style="border-left:6px solid ${escapeHtml(G.Color || '#0f766e')}">
+      <h1 class="page-title" style="margin:0">${G.Icon ? escapeHtml(G.Icon) + ' ' : ''}${escapeHtml(G.Name)}${G.Archived ? ' <span class="badge">archived</span>' : ''}</h1>
+      ${G.Description ? `<p class="notes-text">${escapeHtml(G.Description)}</p>` : ''}
+      <p class="muted small">${shown.length} ${shown.length === 1 ? 'person' : 'people'}${hidden ? ` (plus ${hidden} archived)` : ''}</p>
+      <div class="btn-row">
+        <button type="button" class="btn" id="add-btn">+ Add people</button>
+        <a class="btn secondary" href="edit.html?group=${G.Id}">+ New person</a>
+        <button type="button" class="btn secondary" id="edit-btn">✏️ Edit</button>
+        <button type="button" class="btn secondary" id="arch-btn">${G.Archived ? 'Unarchive' : 'Archive'}</button>
+        <button type="button" class="btn danger" id="del-btn">Delete group</button>
+      </div>
+    </div>
+    <ul class="person-list">${shown.length ? shown.map(p => `
+      <li class="person-row">
+        <a class="who" href="person.html?id=${p.Id}">${avatarHtml(p, 'sm')}
+          <span class="txt"><div class="name">${escapeHtml(displayName(p))}${p.Status === 'deceased' ? ' <span class="badge deceased">deceased</span>' : ''}</div>
+          <div class="sub">${escapeHtml((p.Phones[0] || p.Emails[0] || {}).Value || '')}</div></span></a>
+        <button type="button" class="icon-btn" data-remove="${p.Id}" aria-label="Remove ${escapeHtml(displayName(p))} from this group" title="Remove from group">✕</button>
+      </li>`).join('') : '<li class="person-row"><span class="empty">No one in this group yet.</span></li>'}</ul>
+    ${hidden ? `<p class="small"><a href="people.html?group=${G.Id}&status=archived">See archived members</a></p>` : ''}`;
+
+  document.getElementById('add-btn').addEventListener('click', openAdd);
+  document.getElementById('edit-btn').addEventListener('click', () => openGroupDialog(G, () => load()));
+  document.getElementById('arch-btn').addEventListener('click', toggleArchive);
+  document.getElementById('del-btn').addEventListener('click', removeGroup);
+  contentEl.querySelectorAll('[data-remove]').forEach(b => b.addEventListener('click', () => removeMember(Number(b.dataset.remove))));
+}
+
+async function removeMember(pid) {
+  const p = PEOPLE.find(x => x.Id === pid);
+  try {
+    await postAction('groupMembers', { groupId, remove: [pid] });
+    p.GroupIds = p.GroupIds.filter(id => id !== groupId);
+    showStatus(`Removed ${displayName(p)} from ${G.Name}.`);
+    render();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't remove them."), true);
+  }
+}
+
+async function toggleArchive() {
+  try {
+    await postAction('setGroupArchived', { id: groupId, archived: !G.Archived });
+    G.Archived = !G.Archived;
+    showStatus(G.Archived ? 'Group archived — it\'s hidden from pickers but kept.' : 'Group is active again.');
+    render();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't change that."), true);
+  }
+}
+
+async function removeGroup() {
+  if (!confirm(`Delete the group "${G.Name}"? The people in it stay in PeopleLink — only the group goes away.`)) return;
+  try {
+    await postAction('deleteGroup', { id: groupId });
+    window.location.href = 'groups.html';
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't delete the group."), true);
+  }
+}
+
+function openAdd() {
+  const dlg = document.getElementById('add-dlg');
+  const candidates = PEOPLE.filter(p => p.Status !== 'archived' && !p.GroupIds.includes(groupId))
+    .sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
+  dlg.innerHTML = `<div class="dlg">
+    <h2 id="ad-title">Add people to ${escapeHtml(G.Name)}</h2>
+    ${candidates.length ? `
+      <input type="search" id="ad-q" placeholder="Search…" aria-label="Search people">
+      <div class="pick-list" id="ad-list">${candidates.map(p => `
+        <label data-name="${escapeHtml(fullName(p).toLowerCase() + ' ' + (p.Nickname || '').toLowerCase())}"><input type="checkbox" value="${p.Id}"> ${avatarHtml(p, 'sm')} ${escapeHtml(displayName(p))}</label>`).join('')}</div>`
+      : '<p class="empty">Everyone is already in this group.</p>'}
+    <div class="dlg-actions"><button type="button" class="btn secondary" id="ad-cancel">Cancel</button>${candidates.length ? '<button type="button" class="btn" id="ad-save">Add</button>' : ''}</div>
+  </div>`;
+  dlg.querySelector('#ad-cancel').addEventListener('click', () => dlg.close());
+  const q = dlg.querySelector('#ad-q');
+  if (q) q.addEventListener('input', () => {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    dlg.querySelectorAll('#ad-list label').forEach(l => { l.hidden = !words.every(w => l.dataset.name.includes(w)); });
+  });
+  const save = dlg.querySelector('#ad-save');
+  if (save) save.addEventListener('click', async () => {
+    const ids = [...dlg.querySelectorAll('#ad-list input:checked')].map(i => Number(i.value));
+    if (!ids.length) { dlg.close(); return; }
+    try {
+      await postAction('groupMembers', { groupId, add: ids });
+      ids.forEach(id => PEOPLE.find(p => p.Id === id).GroupIds.push(groupId));
+      dlg.close();
+      showStatus(`Added ${ids.length} to ${G.Name}.`);
+      render();
+    } catch (e) {
+      showStatus(errorText(e, "Couldn't add them."), true);
+    }
+  });
+  dlg.showModal();
+  if (q) q.focus();
+}
+
+async function load() {
+  try {
+    const data = await fetchData('people');
+    PEOPLE = data.People;
+    G = data.Groups.find(g => g.Id === groupId);
+    if (!G) { contentEl.innerHTML = '<p class="note">That group isn\'t in your list. <a href="groups.html">Back to Groups</a></p>'; return; }
+    render();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+}
+load();
+</script>
+</body>
+</html>

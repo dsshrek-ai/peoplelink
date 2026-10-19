@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Person · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<dialog id="groups-dlg" aria-labelledby="gd-title"></dialog>
+<script src="js/mdw-prefs.js?v=1"></script>
+<script src="js/app.js?v=1"></script>
+<script>
+renderNav('people.html');
+const contentEl = document.getElementById('content');
+const personId = Number(qsParam('id'));
+let P = null;
+let GROUPS = [];
+
+function row(label, valueHtml, actsHtml) {
+  return `<div class="info-row"><span class="lbl">${escapeHtml(label)}</span><span class="val">${valueHtml}</span>${actsHtml ? `<span class="acts">${actsHtml}</span>` : ''}</div>`;
+}
+
+function render() {
+  const p = P;
+  document.title = `${displayName(p)} · PeopleLink`;
+  const job = [p.JobTitle, p.Organization].filter(Boolean).join(' at ');
+  const aka = [];
+  if (p.Nickname && p.FirstName && p.Nickname !== p.FirstName) aka.push(fullName(p));
+  else if (p.MiddleName) aka.push(fullName(p));
+
+  const phones = p.Phones.map(x => {
+    const n = escapeHtml(dialable(x.Value));
+    return row(labelText(x.Label) || 'Phone', escapeHtml(x.Value),
+      `<a class="btn small secondary" href="tel:${n}" aria-label="Call ${escapeHtml(x.Value)}">📞 Call</a><a class="btn small secondary" href="sms:${n}" aria-label="Text ${escapeHtml(x.Value)}">💬 Text</a>`);
+  }).join('');
+  const emails = p.Emails.map(x => row(labelText(x.Label) || 'Email', escapeHtml(x.Value),
+    `<a class="btn small secondary" href="mailto:${escapeHtml(x.Value)}">✉️ Email</a>`)).join('');
+  const addrs = p.Addresses.map((a, i) => row(labelText(a.Label) || 'Address', escapeHtml(addressLines(a).join('\n')),
+    `<button type="button" class="btn small secondary" data-map="${i}">🗺️ Map</button>`)).join('');
+
+  const dates = [];
+  if (p.Birthday) {
+    const age = currentAge(p.Birthday);
+    const n = daysUntil(p.Birthday);
+    dates.push(row('Birthday', `${escapeHtml(fmtPartialDate(p.Birthday))}${age !== null && p.Status !== 'deceased' ? ` <span class="muted">(age ${age})</span>` : ''}${p.Status === 'active' && n <= 30 ? ` <span class="muted">· ${escapeHtml(whenLabel(n).toLowerCase())}</span>` : ''}`,
+      p.Status === 'active' ? `<button type="button" class="btn small secondary" data-cal="Birthday">📅 Calendar</button>` : ''));
+  }
+  if (p.Anniversary) {
+    dates.push(row('Anniv.', escapeHtml(fmtPartialDate(p.Anniversary)),
+      p.Status === 'active' ? `<button type="button" class="btn small secondary" data-cal="Anniversary">📅 Calendar</button>` : ''));
+  }
+
+  const myGroups = GROUPS.filter(g => p.GroupIds.includes(g.Id));
+
+  contentEl.innerHTML = `
+    <p class="small"><a href="people.html">← People</a></p>
+    <div class="card">
+      <div class="profile-head">
+        ${avatarHtml(p, 'lg')}
+        <div class="who">
+          <h1>${escapeHtml(displayName(p))} <button type="button" class="icon-btn${p.Pinned ? ' on' : ''}" id="pin-btn" aria-pressed="${p.Pinned}" title="${p.Pinned ? 'Unpin' : 'Pin to Dashboard'}">${p.Pinned ? '★' : '☆'}</button></h1>
+          ${aka.length ? `<div class="aka">${escapeHtml(aka.join(' · '))}</div>` : ''}
+          ${job ? `<div>${escapeHtml(job)}</div>` : ''}
+          ${p.Occupation ? `<div class="muted">${escapeHtml(p.Occupation)}</div>` : ''}
+          ${p.Status !== 'active' ? `<span class="badge ${p.Status}">${p.Status}</span>` : ''}
+        </div>
+      </div>
+      <div class="btn-row profile-actions">
+        <a class="btn" href="edit.html?id=${p.Id}">✏️ Edit</a>
+        ${p.Phones[0] ? `<a class="btn secondary" href="tel:${escapeHtml(dialable(p.Phones[0].Value))}">📞 Call</a>
+          <a class="btn secondary" href="sms:${escapeHtml(dialable(p.Phones[0].Value))}">💬 Text</a>` : ''}
+        ${p.Emails[0] ? `<a class="btn secondary" href="mailto:${escapeHtml(p.Emails[0].Value)}">✉️ Email</a>` : ''}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Contact info</h2>
+      ${phones || emails || addrs ? phones + emails + addrs : '<p class="empty">No phone, email or address yet. <a href="edit.html?id=' + p.Id + '">Add some</a>.</p>'}
+    </div>
+
+    ${dates.length ? `<div class="card"><h2>Dates</h2>${dates.join('')}</div>` : ''}
+
+    <div class="card">
+      <div class="card-head"><h2>Groups</h2><button type="button" class="btn small secondary" id="groups-btn">Change</button></div>
+      ${myGroups.length ? `<div class="chips">${myGroups.map(g => groupChip(g, `group.html?id=${g.Id}`)).join('')}</div>` : '<p class="empty">Not in any group.</p>'}
+    </div>
+
+    <div class="card">
+      <h2>Notes</h2>
+      ${p.Notes ? `<div class="notes-text">${escapeHtml(p.Notes)}</div>` : '<p class="empty">No notes. Notes are private — they\'re never shared or exported.</p>'}
+    </div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <p class="muted small">Archived people are hidden from lists and the Dashboard but kept. Deceased people stay in your records without birthday reminders.</p>
+      <div class="btn-row">
+        ${p.Status !== 'active' ? '<button type="button" class="btn secondary" data-status="active">Make active</button>' : ''}
+        ${p.Status !== 'archived' ? '<button type="button" class="btn secondary" data-status="archived">Archive</button>' : ''}
+        ${p.Status !== 'deceased' ? '<button type="button" class="btn secondary" data-status="deceased">Mark deceased</button>' : ''}
+        <button type="button" class="btn danger" id="delete-btn">Delete</button>
+      </div>
+    </div>`;
+
+  document.getElementById('pin-btn').addEventListener('click', togglePin);
+  document.getElementById('groups-btn').addEventListener('click', openGroups);
+  document.getElementById('delete-btn').addEventListener('click', removePerson);
+  contentEl.querySelectorAll('[data-status]').forEach(b => b.addEventListener('click', () => setStatus(b.dataset.status)));
+  contentEl.querySelectorAll('[data-map]').forEach(b => b.addEventListener('click', () => {
+    MdwPrefs.navigate(addressOneLine(p.Addresses[Number(b.dataset.map)]));
+  }));
+  contentEl.querySelectorAll('[data-cal]').forEach(b => b.addEventListener('click', () => addDateToCalendar(b.dataset.cal)));
+}
+
+// An all-day event on the next occurrence; the calendar app can repeat it.
+function addDateToCalendar(field) {
+  const t = todayParts();
+  const next = new Date(t.Year, t.Month - 1, t.Day + daysUntil(P[field]));
+  const year = next.getFullYear();
+  const pad = n => String(n).padStart(2, '0');
+  const title = field === 'Birthday' ? `${displayName(P)}'s birthday` : `${displayName(P)}'s anniversary`;
+  MdwPrefs.addToCalendar({
+    uid: `peoplelink-${P.Id}-${field.toLowerCase()}-${year}@peoplelink`,
+    title,
+    date: `${year}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`,
+    startTime: null,
+    endTime: null,
+    notes: '',
+    location: '',
+    reminderMinutes: null,
+  });
+}
+
+async function togglePin() {
+  try {
+    await postAction('setPinned', { id: P.Id, pinned: !P.Pinned });
+    P.Pinned = !P.Pinned;
+    showStatus(P.Pinned ? 'Pinned to your Dashboard.' : 'Unpinned.');
+    render();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't change that."), true);
+  }
+}
+
+async function setStatus(status) {
+  try {
+    await postAction('setStatus', { ids: [P.Id], status });
+    P.Status = status;
+    showStatus(status === 'active' ? 'Active again.' : `Marked ${status}.`);
+    render();
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't change the status."), true);
+  }
+}
+
+async function removePerson() {
+  if (!confirm(`Delete ${displayName(P)} permanently? Their phones, emails, addresses, notes and photo go too. (Archive instead if you might want them back.)`)) return;
+  try {
+    await postAction('deletePeople', { ids: [P.Id] });
+    window.location.href = 'people.html';
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't delete."), true);
+  }
+}
+
+function openGroups() {
+  const dlg = document.getElementById('groups-dlg');
+  const list = GROUPS.filter(g => !g.Archived || P.GroupIds.includes(g.Id));
+  dlg.innerHTML = `<div class="dlg">
+    <h2 id="gd-title">Groups for ${escapeHtml(displayName(P))}</h2>
+    ${list.length ? `<div class="pick-list">${list.map(g => `
+      <label><input type="checkbox" value="${g.Id}" ${P.GroupIds.includes(g.Id) ? 'checked' : ''}> ${g.Icon ? escapeHtml(g.Icon) + ' ' : ''}${escapeHtml(g.Name)}</label>`).join('')}</div>`
+      : '<p class="empty">You have no groups yet.</p>'}
+    <p class="small"><a href="groups.html">Create or manage groups →</a></p>
+    <div class="dlg-actions"><button type="button" class="btn secondary" id="gd-cancel">Cancel</button><button type="button" class="btn" id="gd-save">Save</button></div>
+  </div>`;
+  dlg.querySelector('#gd-cancel').addEventListener('click', () => dlg.close());
+  dlg.querySelector('#gd-save').addEventListener('click', async () => {
+    const checked = [...dlg.querySelectorAll('input:checked')].map(i => Number(i.value));
+    try {
+      for (const g of list) {
+        const was = P.GroupIds.includes(g.Id);
+        const now = checked.includes(g.Id);
+        if (was !== now) await postAction('groupMembers', { groupId: g.Id, add: now ? [P.Id] : [], remove: now ? [] : [P.Id] });
+      }
+      P.GroupIds = P.GroupIds.filter(id => !list.some(g => g.Id === id)).concat(checked);
+      dlg.close();
+      showStatus('Groups updated.');
+      render();
+    } catch (e) {
+      showStatus(errorText(e, "Couldn't update groups."), true);
+    }
+  });
+  dlg.showModal();
+}
+
+(async () => {
+  if (!personId) { contentEl.innerHTML = '<p class="note">No person chosen. <a href="people.html">Back to People</a></p>'; return; }
+  try {
+    const data = await fetchData('person', { id: personId });
+    P = data.Person;
+    GROUPS = data.Groups;
+    render();
+  } catch (e) {
+    if (e.status === 404) contentEl.innerHTML = '<p class="note">That person isn\'t in your list. <a href="people.html">Back to People</a></p>';
+    else handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>
