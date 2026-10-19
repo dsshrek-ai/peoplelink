@@ -8,16 +8,16 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>Group · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=1">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page narrow" id="content">Loading&hellip;</main>
 <dialog id="group-dlg" aria-label="Group"></dialog>
 <dialog id="add-dlg" aria-labelledby="ad-title"></dialog>
-<script src="js/mdw-prefs.js?v=1"></script>
-<script src="js/app.js?v=1"></script>
-<script src="js/groups.js?v=1"></script>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+<script src="js/groups.js?v=2"></script>
 <script>
 renderNav('groups.html');
 const contentEl = document.getElementById('content');
@@ -44,6 +44,8 @@ function render() {
       <div class="btn-row">
         <button type="button" class="btn" id="add-btn">+ Add people</button>
         <a class="btn secondary" href="edit.html?group=${G.Id}">+ New person</a>
+        <a class="btn secondary" href="share.html?group=${G.Id}">📤 Share</a>
+        <a class="btn secondary" href="export.html?group=${G.Id}">⬇️ Export</a>
         <button type="button" class="btn secondary" id="edit-btn">✏️ Edit</button>
         <button type="button" class="btn secondary" id="arch-btn">${G.Archived ? 'Unarchive' : 'Archive'}</button>
         <button type="button" class="btn danger" id="del-btn">Delete group</button>

@@ -8,13 +8,13 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=1">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page" id="content">Loading&hellip;</main>
-<script src="js/mdw-prefs.js?v=1"></script>
-<script src="js/app.js?v=1"></script>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
 <script>
 renderNav('index.html');
 const contentEl = document.getElementById('content');
@@ -60,8 +60,10 @@ async function load() {
         <div class="card">
           <h2>Welcome to PeopleLink</h2>
           <p>Start by adding the people in your life. You can put each person in as many groups as you like — Family, Neighbors, Choir, and so on.</p>
-          <div class="btn-row"><a class="btn" href="edit.html">+ Add a person</a><a class="btn secondary" href="help.html">How it works</a></div>
+          <div class="btn-row"><a class="btn" href="edit.html">+ Add a person</a><a class="btn secondary" href="import.html">⬆️ Import from Google Contacts</a><a class="btn secondary" href="help.html">How it works</a></div>
         </div>` : ''}
+      ${boot.PendingInvitations ? `
+        <div class="note" style="margin-bottom:0.9rem">📨 <strong>${boot.PendingInvitations}</strong> shared group${boot.PendingInvitations === 1 ? ' is' : 's are'} waiting for you. <a href="invitations.html">Review</a></div>` : ''}
       <div class="dash-grid">
         <div>
           <div class="card">

@@ -217,3 +217,16 @@ dialog h2 { margin-bottom: 0.3rem; }
 .about-hero .logo { font-size: 3rem; }
 .about-hero .tagline { font-style: italic; color: var(--muted); }
 blockquote.mission { border-left: 4px solid var(--primary); margin: 0.6rem 0; padding: 0.2rem 0 0.2rem 0.9rem; font-weight: 600; }
+
+/* ---- import wizard / duplicate review ---- */
+.steps { display: flex; flex-wrap: wrap; gap: 0.3rem; list-style: none; padding: 0; margin: 0 0 0.9rem; counter-reset: step; }
+.steps li { counter-increment: step; font-size: 0.82rem; padding: 0.2rem 0.65rem; border-radius: 999px; background: var(--line); color: var(--muted); }
+.steps li::before { content: counter(step) ". "; }
+.steps li.on { background: var(--primary); color: #fff; font-weight: 700; }
+.steps li.done { background: var(--tint); color: var(--primary-dark); }
+.dup-list { list-style: none; margin: 0; padding: 0; }
+.dup-list li { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0; border-top: 1px solid var(--line); }
+.dup-list li:first-child { border-top: 0; }
+.dup-list .dup-who { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.dup-list select { width: auto; flex-shrink: 0; }
+details summary { cursor: pointer; }

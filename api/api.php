@@ -567,6 +567,396 @@ function saveGroup(int $userId, array $b): int {
                'issss', [$userId, $name, $desc, $color, $icon]);
 }
 
+// ---- Import engine (CSV import and accepting a shared group) ----
+// A "record" is one incoming contact in the shape the browser sends:
+// { firstName, middleName, lastName, nickname, organization, jobTitle,
+//   birthday:{year,month,day}, notes, pinned, phones:[{label,value}],
+//   emails:[...], addresses:[{label,street,city,region,postalCode,country}],
+//   groupNames:[...] }.
+// Normalizing is lenient -- a bad birthday or email is dropped, never fatal --
+// so one odd row can't stop a whole import.
+
+function lenientDate($d): array {
+  if (!is_array($d)) {
+    return [null, null, null];
+  }
+  $y = isset($d['year']) && $d['year'] !== '' && $d['year'] !== null ? (int)$d['year'] : null;
+  $m = isset($d['month']) && $d['month'] !== '' && $d['month'] !== null ? (int)$d['month'] : null;
+  $day = isset($d['day']) && $d['day'] !== '' && $d['day'] !== null ? (int)$d['day'] : null;
+  if ($m === null || $day === null || !checkdate($m, $day, $y ?? 2000)) {
+    return [null, null, null];
+  }
+  if ($y !== null && ($y < 1800 || $y > (int)date('Y') + 1)) {
+    $y = null;
+  }
+  return [$y, $m, $day];
+}
+
+function normalizeRecord(array $r): ?array {
+  $out = [
+    'first' => strOrNull($r['firstName'] ?? null, 100),
+    'middle' => strOrNull($r['middleName'] ?? null, 100),
+    'last' => strOrNull($r['lastName'] ?? null, 100),
+    'nick' => strOrNull($r['nickname'] ?? null, 100),
+    'org' => strOrNull($r['organization'] ?? null, 150),
+    'title' => strOrNull($r['jobTitle'] ?? null, 150),
+    'notes' => strOrNull($r['notes'] ?? null, 65000),
+    'pinned' => !empty($r['pinned']),
+    'birthday' => lenientDate($r['birthday'] ?? null),
+    'anniversary' => lenientDate($r['anniversary'] ?? null),
+    'phones' => [],
+    'emails' => [],
+    'addresses' => [],
+    'groupNames' => [],
+  ];
+  if ($out['first'] === null && $out['last'] === null && $out['nick'] === null && $out['org'] === null) {
+    return null;
+  }
+  foreach ((array)($r['phones'] ?? []) as $x) {
+    $v = strOrNull($x['value'] ?? null, 255);
+    if ($v !== null) {
+      $out['phones'][] = [labelOrOther($x['label'] ?? null, PHONE_LABELS), $v];
+    }
+  }
+  foreach ((array)($r['emails'] ?? []) as $x) {
+    $v = strOrNull($x['value'] ?? null, 255);
+    if ($v !== null && strpos($v, '@') !== false) {
+      $out['emails'][] = [labelOrOther($x['label'] ?? null, EMAIL_LABELS), $v];
+    }
+  }
+  foreach ((array)($r['addresses'] ?? []) as $x) {
+    $a = [
+      labelOrOther($x['label'] ?? null, ADDRESS_LABELS),
+      strOrNull($x['street'] ?? null, 255), strOrNull($x['city'] ?? null, 100), strOrNull($x['region'] ?? null, 100),
+      strOrNull($x['postalCode'] ?? null, 20), strOrNull($x['country'] ?? null, 100),
+    ];
+    if ($a[1] !== null || $a[2] !== null || $a[3] !== null || $a[4] !== null || $a[5] !== null) {
+      $out['addresses'][] = $a;
+    }
+  }
+  foreach ((array)($r['groupNames'] ?? []) as $g) {
+    $g = strOrNull($g, 100);
+    if ($g !== null) {
+      $out['groupNames'][] = $g;
+    }
+  }
+  return $out;
+}
+
+// Finds (or creates) this user's group by name.
+function groupIdByName(int $userId, string $name, array $style = []): int {
+  $rows = q('SELECT id FROM pl_groups WHERE user_id = ? AND name = ?', 'is', [$userId, $name]);
+  if ($rows) {
+    return (int)$rows[0]['id'];
+  }
+  return exec1('INSERT INTO pl_groups (user_id, name, description, color, icon) VALUES (?, ?, ?, ?, ?)',
+               'issss', [$userId, $name, $style['description'] ?? null, $style['color'] ?? null, $style['icon'] ?? null]);
+}
+
+function phoneKey(string $v): string {
+  $d = preg_replace('/\D/', '', $v);
+  return strlen($d) > 10 ? substr($d, -10) : $d;
+}
+
+function addressKey(array $a): string {
+  return strtolower(preg_replace('/\W/', '', ($a[1] ?? '') . '|' . ($a[4] ?? '') . '|' . ($a[2] ?? '')));
+}
+
+function insertMethods(int $personId, array $rec, int $startOrder): void {
+  $i = $startOrder;
+  foreach ([['phone', $rec['phones']], ['email', $rec['emails']]] as [$kind, $list]) {
+    foreach ($list as [$label, $value]) {
+      exec1('INSERT INTO pl_contact_methods (person_id, kind, label, value, sort_order) VALUES (?, ?, ?, ?, ?)',
+            'isssi', [$personId, $kind, $label, $value, $i++]);
+    }
+  }
+  foreach ($rec['addresses'] as $a) {
+    exec1('INSERT INTO pl_addresses (person_id, label, street, city, region, postal_code, country, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)', 'issssssi', array_merge([$personId], $a, [$i++]));
+  }
+}
+
+function createFromRecord(int $userId, array $rec): int {
+  [$by, $bm, $bd] = $rec['birthday'];
+  [$ay, $am, $ad] = $rec['anniversary'];
+  $id = exec1('INSERT INTO pl_people (user_id, first_name, middle_name, last_name, nickname, organization, job_title,
+                 birth_year, birth_month, birth_day, anniv_year, anniv_month, anniv_day, notes, is_pinned)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              'issssssiiiiiisi', [$userId, $rec['first'], $rec['middle'], $rec['last'], $rec['nick'], $rec['org'], $rec['title'],
+                                  $by, $bm, $bd, $ay, $am, $ad, $rec['notes'], $rec['pinned'] ? 1 : 0]);
+  insertMethods($id, $rec, 0);
+  return $id;
+}
+
+// Merging never overwrites: it fills fields that are empty, adds phones /
+// emails / addresses the person doesn't already have, and keeps every
+// existing note, date and preference.
+function mergeRecord(int $userId, int $personId, array $rec): void {
+  $p = ownPerson($userId, $personId);
+  $sets = [];
+  $types = '';
+  $vals = [];
+  foreach (['first_name' => 'first', 'middle_name' => 'middle', 'last_name' => 'last', 'nickname' => 'nick',
+            'organization' => 'org', 'job_title' => 'title', 'notes' => 'notes'] as $col => $key) {
+    if ($p[$col] === null && $rec[$key] !== null) {
+      $sets[] = "$col = ?";
+      $types .= 's';
+      $vals[] = $rec[$key];
+    }
+  }
+  if ($p['birth_month'] === null && $rec['birthday'][1] !== null) {
+    $sets[] = 'birth_year = ?, birth_month = ?, birth_day = ?';
+    $types .= 'iii';
+    array_push($vals, ...$rec['birthday']);
+  }
+  if ($p['anniv_month'] === null && $rec['anniversary'][1] !== null) {
+    $sets[] = 'anniv_year = ?, anniv_month = ?, anniv_day = ?';
+    $types .= 'iii';
+    array_push($vals, ...$rec['anniversary']);
+  }
+  if ($rec['pinned'] && !$p['is_pinned']) {
+    $sets[] = 'is_pinned = 1';
+  }
+  if ($sets) {
+    $types .= 'ii';
+    array_push($vals, $personId, $userId);
+    exec1('UPDATE pl_people SET ' . implode(', ', $sets) . ' WHERE id = ? AND user_id = ?', $types, $vals);
+  }
+
+  $havePhones = [];
+  $haveEmails = [];
+  $max = 0;
+  foreach (q('SELECT kind, value, sort_order FROM pl_contact_methods WHERE person_id = ?', 'i', [$personId]) as $m) {
+    if ($m['kind'] === 'phone') {
+      $havePhones[phoneKey($m['value'])] = true;
+    } else {
+      $haveEmails[strtolower($m['value'])] = true;
+    }
+    $max = max($max, (int)$m['sort_order']);
+  }
+  $haveAddr = [];
+  foreach (q('SELECT * FROM pl_addresses WHERE person_id = ?', 'i', [$personId]) as $a) {
+    $haveAddr[addressKey([null, $a['street'], $a['city'], null, $a['postal_code']])] = true;
+    $max = max($max, (int)$a['sort_order']);
+  }
+  $new = [
+    'phones' => array_values(array_filter($rec['phones'], fn($x) => !isset($havePhones[phoneKey($x[1])]))),
+    'emails' => array_values(array_filter($rec['emails'], fn($x) => !isset($haveEmails[strtolower($x[1])]))),
+    'addresses' => array_values(array_filter($rec['addresses'], fn($a) => !isset($haveAddr[addressKey($a)]))),
+  ];
+  insertMethods($personId, $new, $max + 1);
+}
+
+// items: [{ action: 'create'|'merge', personId?, record }]. Returns counts and
+// per-item problems; $extraGroupId (a share's destination group) is added to
+// everyone created or merged.
+function applyItems(int $userId, array $items, ?int $extraGroupId = null): array {
+  $created = 0;
+  $merged = 0;
+  $skipped = 0;
+  $problems = [];
+  $ids = [];        // item index => person id it created or merged into
+  $groupCache = [];
+  $conn = db();
+  $conn->begin_transaction();
+  foreach ($items as $i => $item) {
+    $action = $item['action'] ?? '';
+    if ($action === 'skip') {
+      $skipped++;
+      continue;
+    }
+    $rec = normalizeRecord((array)($item['record'] ?? []));
+    if ($rec === null) {
+      $problems[] = ['Index' => $i, 'Error' => 'No name or organization'];
+      continue;
+    }
+    if ($action === 'merge') {
+      $pid = (int)($item['personId'] ?? 0);
+      if (!ownedIds($userId, 'pl_people', [$pid])) {
+        $problems[] = ['Index' => $i, 'Error' => 'The person to merge into is gone'];
+        continue;
+      }
+      mergeRecord($userId, $pid, $rec);
+      $merged++;
+    } elseif ($action === 'create') {
+      $pid = createFromRecord($userId, $rec);
+      $created++;
+    } else {
+      $problems[] = ['Index' => $i, 'Error' => 'Unknown action'];
+      continue;
+    }
+    $ids[$i] = $pid;
+    $gids = [];
+    foreach ($rec['groupNames'] as $name) {
+      $groupCache[$name] = $groupCache[$name] ?? groupIdByName($userId, $name);
+      $gids[] = $groupCache[$name];
+    }
+    if ($extraGroupId) {
+      $gids[] = $extraGroupId;
+    }
+    foreach (array_unique($gids) as $gid) {
+      exec1('INSERT IGNORE INTO pl_group_members (group_id, person_id) VALUES (?, ?)', 'ii', [$gid, $pid]);
+    }
+  }
+  $conn->commit();
+  return ['Created' => $created, 'Merged' => $merged, 'Skipped' => $skipped, 'Problems' => $problems, 'Ids' => $ids];
+}
+
+// ---- Group sharing (copy, not sync) ----
+
+function shareUserName(array $u): string {
+  return $u['display_name'] ?: $u['username'];
+}
+
+function createShare(int $userId, array $b): array {
+  $g = ownGroup($userId, (int)($b['groupId'] ?? 0));
+  $username = trim((string)($b['username'] ?? ''));
+  if ($username === '') {
+    fail('Enter the MyDataWorld username of the person to share with');
+  }
+  $to = q('SELECT id, username, display_name FROM users WHERE username = ?', 's', [$username]);
+  if (!$to) {
+    fail('No MyDataWorld login has that username', 404);
+  }
+  $to = $to[0];
+  if ((int)$to['id'] === $userId) {
+    fail('That\'s your own login');
+  }
+  if (!hasAppAccess((int)$to['id'])) {
+    fail(shareUserName($to) . ' isn\'t set up for PeopleLink yet. Grant them access in My Apps Hub first.');
+  }
+  $includePhotos = !empty($b['includePhotos']);
+
+  $ids = array_map(fn($r) => (int)$r['person_id'], q(
+    "SELECT m.person_id FROM pl_group_members m JOIN pl_people p ON p.id = m.person_id
+     WHERE m.group_id = ? AND p.user_id = ? AND p.status <> 'archived'", 'ii', [(int)$g['id'], $userId]));
+  if (!$ids) {
+    fail('This group has no one in it to share');
+  }
+  // Only the basic fields ever leave the sender's records.
+  $payload = [];
+  $copied = [];
+  foreach (loadPeople($userId, $ids) as $p) {
+    $photo = null;
+    if ($includePhotos && $p['PhotoKey']) {
+      $new = bin2hex(random_bytes(16));
+      if (@copy(photoPath($p['PhotoKey'], false), photoPath($new, false)) && @copy(photoPath($p['PhotoKey'], true), photoPath($new, true))) {
+        $photo = $new;
+        $copied[] = $new;
+      } else {
+        deletePhotoFiles($new);
+      }
+    }
+    $payload[] = [
+      'firstName' => $p['FirstName'], 'middleName' => $p['MiddleName'], 'lastName' => $p['LastName'],
+      'nickname' => $p['Nickname'],
+      'phones' => array_map(fn($x) => ['label' => $x['Label'], 'value' => $x['Value']], $p['Phones']),
+      'emails' => array_map(fn($x) => ['label' => $x['Label'], 'value' => $x['Value']], $p['Emails']),
+      'addresses' => array_map(fn($a) => ['label' => $a['Label'], 'street' => $a['Street'], 'city' => $a['City'],
+        'region' => $a['Region'], 'postalCode' => $a['PostalCode'], 'country' => $a['Country']], $p['Addresses']),
+      'photoKey' => $photo,
+    ];
+  }
+  $id = exec1('INSERT INTO pl_share_invitations (from_user_id, to_user_id, group_name, group_description, group_color,
+                 group_icon, payload, people_count, include_photos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              'iisssssii', [$userId, (int)$to['id'], $g['name'], $g['description'], $g['color'], $g['icon'],
+                            json_encode($payload), count($payload), $includePhotos ? 1 : 0]);
+  return ['Id' => $id, 'To' => shareUserName($to), 'Count' => count($payload)];
+}
+
+// Removes the photo copies an invitation was holding.
+function dropSharePhotos(array $inv, array $keep = []): void {
+  foreach (json_decode($inv['payload'], true) ?: [] as $c) {
+    if (!empty($c['photoKey']) && !in_array($c['photoKey'], $keep, true)) {
+      deletePhotoFiles($c['photoKey']);
+    }
+  }
+}
+
+function invitationJson(array $r, bool $withPayload): array {
+  $out = [
+    'Id' => (int)$r['id'],
+    'From' => $r['from_name'] ?? null,
+    'To' => $r['to_name'] ?? null,
+    'GroupName' => $r['group_name'],
+    'GroupDescription' => $r['group_description'],
+    'GroupColor' => $r['group_color'],
+    'GroupIcon' => $r['group_icon'],
+    'Count' => (int)$r['people_count'],
+    'IncludesPhotos' => (bool)$r['include_photos'],
+    'Status' => $r['status'],
+    'Summary' => $r['result_summary'],
+    'CreatedAt' => $r['created_at'],
+    'RespondedAt' => $r['responded_at'],
+  ];
+  if ($withPayload) {
+    $out['People'] = json_decode($r['payload'], true) ?: [];
+  }
+  return $out;
+}
+
+function incomingInvitation(int $userId, int $id): array {
+  $rows = q("SELECT i.*, COALESCE(NULLIF(u.display_name, ''), u.username) AS from_name
+             FROM pl_share_invitations i JOIN users u ON u.id = i.from_user_id
+             WHERE i.id = ? AND i.to_user_id = ?", 'ii', [$id, $userId]);
+  if (!$rows) {
+    fail('Invitation not found', 404);
+  }
+  return $rows[0];
+}
+
+// b: { id, groupMode: 'new'|'existing', groupName, groupId,
+//      decisions: [{ index, action: 'create'|'merge'|'skip', personId }] }
+function acceptShare(int $userId, array $b): array {
+  $inv = incomingInvitation($userId, (int)($b['id'] ?? 0));
+  if ($inv['status'] !== 'pending') {
+    fail('This invitation was already ' . $inv['status']);
+  }
+  $people = json_decode($inv['payload'], true) ?: [];
+
+  if (($b['groupMode'] ?? '') === 'existing') {
+    $gid = (int)ownGroup($userId, (int)($b['groupId'] ?? 0))['id'];
+  } else {
+    $name = strOrNull($b['groupName'] ?? null, 100) ?? $inv['group_name'];
+    if (q('SELECT 1 FROM pl_groups WHERE user_id = ? AND name = ?', 'is', [$userId, $name])) {
+      fail("You already have a group called \"$name\" -- pick another name, or choose \"Add to an existing group\"");
+    }
+    $gid = groupIdByName($userId, $name, ['description' => $inv['group_description'], 'color' => $inv['group_color'], 'icon' => $inv['group_icon']]);
+  }
+
+  $decisions = [];
+  foreach ((array)($b['decisions'] ?? []) as $d) {
+    $decisions[(int)($d['index'] ?? -1)] = $d;
+  }
+  $items = [];
+  $photos = [];
+  foreach ($people as $i => $c) {
+    $d = $decisions[$i] ?? ['action' => 'create'];
+    $items[] = ['action' => $d['action'] ?? 'create', 'personId' => $d['personId'] ?? 0, 'record' => $c];
+    $photos[] = $c['photoKey'] ?? null;
+  }
+  $res = applyItems($userId, $items, $gid);
+
+  // Hand the copied photos to the people they belong to (only where that
+  // person has no photo yet); any photo not used is deleted.
+  $used = [];
+  foreach ($res['Ids'] as $i => $pid) {
+    $key = $photos[$i];
+    if ($key && preg_match('/^[0-9a-f]{32}$/', $key)) {
+      if (execCount('UPDATE pl_people SET photo_key = ? WHERE id = ? AND user_id = ? AND photo_key IS NULL', 'sii', [$key, $pid, $userId])) {
+        $used[] = $key;
+      }
+    }
+  }
+  dropSharePhotos($inv, $used);
+
+  $summary = "{$res['Created']} added, {$res['Merged']} merged, {$res['Skipped']} skipped";
+  exec1("UPDATE pl_share_invitations SET status = 'accepted', responded_at = NOW(), result_summary = ? WHERE id = ?",
+        'si', [$summary, (int)$inv['id']]);
+  unset($res['Ids']);
+  return $res + ['GroupId' => $gid];
+}
+
 // ---- Router ----
 
 $method = $_SERVER['REQUEST_METHOD'];
@@ -587,6 +977,7 @@ switch ($action) {
       'DisplayName' => $user['display_name'] ?: $user['username'],
       'Groups' => loadGroups($uid),
       'PeopleCount' => (int)q("SELECT COUNT(*) AS n FROM pl_people WHERE user_id = ? AND status <> 'archived'", 'i', [$uid])[0]['n'],
+      'PendingInvitations' => (int)q("SELECT COUNT(*) AS n FROM pl_share_invitations WHERE to_user_id = ? AND status = 'pending'", 'i', [$uid])[0]['n'],
     ]);
   }
 
@@ -700,6 +1091,79 @@ switch ($action) {
       exec1('DELETE FROM pl_group_members WHERE group_id = ? AND person_id IN (' . placeholders($remove) . ')',
             'i' . str_repeat('i', count($remove)), array_merge([$gid], $remove));
     }
+    respond(['ok' => true]);
+  }
+
+  // ---- Import (the browser parses the CSV and decides create/merge/skip) ----
+
+  // { items: [{ action, personId?, record }] } -- sent in batches.
+  case 'importPeople': {
+    $uid = member();
+    $items = (array)($body['items'] ?? []);
+    if (count($items) > 500) {
+      fail('Send at most 500 contacts per batch');
+    }
+    $res = applyItems($uid, $items);
+    unset($res['Ids']);
+    respond(['ok' => true] + $res);
+  }
+
+  // ---- Sharing ----
+
+  case 'createShare': {
+    $uid = member();
+    respond(['ok' => true] + createShare($uid, $body));
+  }
+
+  case 'invitations': {
+    $uid = member();
+    $in = q("SELECT i.*, COALESCE(NULLIF(u.display_name, ''), u.username) AS from_name
+             FROM pl_share_invitations i JOIN users u ON u.id = i.from_user_id
+             WHERE i.to_user_id = ? AND (i.status = 'pending' OR i.responded_at > NOW() - INTERVAL 60 DAY)
+             ORDER BY i.status = 'pending' DESC, i.created_at DESC", 'i', [$uid]);
+    $out = q("SELECT i.*, COALESCE(NULLIF(u.display_name, ''), u.username) AS to_name
+              FROM pl_share_invitations i JOIN users u ON u.id = i.to_user_id
+              WHERE i.from_user_id = ? AND (i.status = 'pending' OR i.responded_at > NOW() - INTERVAL 60 DAY)
+              ORDER BY i.created_at DESC", 'i', [$uid]);
+    respond([
+      'Incoming' => array_map(fn($r) => invitationJson($r, false), $in),
+      'Outgoing' => array_map(fn($r) => invitationJson($r, false), $out),
+    ]);
+  }
+
+  // Only the recipient can open an invitation's contents.
+  case 'invitation': {
+    $uid = member();
+    respond(['Invitation' => invitationJson(incomingInvitation($uid, (int)($_GET['id'] ?? 0)), true)]);
+  }
+
+  case 'acceptShare': {
+    $uid = member();
+    respond(['ok' => true] + acceptShare($uid, $body));
+  }
+
+  case 'declineShare': {
+    $uid = member();
+    $inv = incomingInvitation($uid, (int)($body['id'] ?? 0));
+    if ($inv['status'] !== 'pending') {
+      fail('This invitation was already ' . $inv['status']);
+    }
+    exec1("UPDATE pl_share_invitations SET status = 'declined', responded_at = NOW() WHERE id = ?", 'i', [(int)$inv['id']]);
+    dropSharePhotos($inv);
+    respond(['ok' => true]);
+  }
+
+  case 'cancelShare': {
+    $uid = member();
+    $rows = q("SELECT * FROM pl_share_invitations WHERE id = ? AND from_user_id = ?", 'ii', [(int)($body['id'] ?? 0), $uid]);
+    if (!$rows) {
+      fail('Invitation not found', 404);
+    }
+    if ($rows[0]['status'] !== 'pending') {
+      fail('This invitation was already ' . $rows[0]['status']);
+    }
+    exec1("UPDATE pl_share_invitations SET status = 'cancelled', responded_at = NOW() WHERE id = ?", 'i', [(int)$rows[0]['id']]);
+    dropSharePhotos($rows[0]);
     respond(['ok' => true]);
   }
 

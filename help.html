@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>Help · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=1">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <header class="site-header"></header>
@@ -31,6 +31,7 @@
   <section class="card help-topic" id="people">
     <h2>Managing people</h2>
     <ol>
+      <li><strong>Bring in your Google contacts:</strong> see <a href="#import">Import from Google Contacts</a> below.</li>
       <li><strong>Find someone:</strong> on <strong>People</strong>, type in the search box. It searches names, nicknames, phone numbers (with or without dashes), emails, addresses and group names.</li>
       <li><strong>Filter:</strong> pick a group, choose Active / Archived / Deceased / Everyone, or tick <strong>⭐ Pinned</strong> or <strong>🎂 This month</strong>.</li>
       <li><strong>Edit:</strong> open the person and tap <strong>✏️ Edit</strong>. Use <strong>+ Add phone</strong>, <strong>+ Add email</strong> or <strong>+ Add address</strong> for more than one; the ✕ removes one.</li>
@@ -87,13 +88,51 @@
     <p>Your people, groups, notes and photos belong to your login only. Notes are never shared with anyone and won't be included in exports.</p>
   </section>
 
+  <section class="card help-topic" id="import">
+    <h2>Import from Google Contacts</h2>
+    <ol>
+      <li>On a computer, open <strong>contacts.google.com</strong>. Tick the contacts you want (or choose a label on the left).</li>
+      <li>Choose <strong>Export</strong> → <strong>Google CSV</strong> and save the file.</li>
+      <li>In PeopleLink, go to <strong>People</strong> → <strong>⬆️ Import</strong> and choose that file.</li>
+      <li><strong>Groups:</strong> tick the Google labels you want as PeopleLink groups. Google's automatic "Imported on…" labels start unticked. Starred contacts can be pinned to your Dashboard.</li>
+      <li><strong>Organizations:</strong> if several contacts share an organization (for example, a choir saved as the "Organization"), you can tick it to make a group with that name too.</li>
+      <li><strong>Duplicates:</strong> anyone who looks like a person you already have (same email, phone, or name) is listed. For each, choose <strong>Merge</strong>, <strong>Add as new</strong>, or <strong>Skip</strong>.</li>
+      <li>Tap <strong>Import</strong>. You'll see how many were added, merged, and skipped.</li>
+    </ol>
+    <p><strong>Merge never overwrites.</strong> It only fills in blanks and adds phone numbers, emails, and addresses the person doesn't already have. Your notes stay exactly as they were.</p>
+    <p>Nothing is saved until the last step — you can cancel any time before that. Importing the same file twice is safe: everyone already added shows up as a duplicate you can skip.</p>
+  </section>
+
+  <section class="card help-topic" id="export">
+    <h2>Export</h2>
+    <ol>
+      <li>Go to <strong>People</strong> → <strong>⬇️ Export</strong>, or open a group and tap <strong>⬇️ Export</strong>, or tap <strong>Select</strong> on People, tick some people, and tap <strong>Export</strong>.</li>
+      <li>Choose <strong>Google Contacts CSV</strong> (to import at contacts.google.com: <strong>Import</strong> → choose the file) or <strong>Standard CSV</strong> (to open in Excel or Google Sheets).</li>
+      <li>When exporting one group, choose whether each person's other groups come along as labels too.</li>
+      <li>Check the preview and tap <strong>Download</strong>.</li>
+    </ol>
+    <p>Exports never include notes, photos, or pins. Google accepts up to 3,000 contacts per file, so bigger exports download as several files.</p>
+  </section>
+
+  <section class="card help-topic" id="sharing">
+    <h2>Sharing a group</h2>
+    <ol>
+      <li>Open the group and tap <strong>📤 Share</strong>.</li>
+      <li>Check the list of who will be shared, and tick <strong>Include profile photos</strong> if you want.</li>
+      <li>Type the other person's MyDataWorld username and tap <strong>Send invitation</strong>. (They need PeopleLink access in My Apps Hub.)</li>
+    </ol>
+    <p><strong>When someone shares with you:</strong> the Dashboard says a shared group is waiting. Tap <strong>Review</strong>, choose a new group or one of yours to put everyone in, pick <strong>Merge</strong>, <strong>Add</strong>, or <strong>Skip</strong> for each person, and tap <strong>Accept</strong> — or <strong>Decline</strong>.</p>
+    <p><strong>What's shared:</strong> names, nicknames, phones, emails, addresses, the group's name and description, and photos if chosen. <strong>Never shared:</strong> notes, birthdays, anniversaries, work details, pins, or the other groups people are in.</p>
+    <p>It's a copy, not a link — changes either of you make afterwards aren't passed along. You can cancel an invitation from <strong>Groups</strong> → <strong>📨 Invitations</strong> until it's accepted.</p>
+  </section>
+
   <section class="card help-topic" id="coming">
     <h2>Coming next</h2>
-    <p>Still to come in version 0.1: importing and exporting Google Contacts, sharing a group with another PeopleLink user, a journal of conversations and visits, contact reminders, relationships and households, and planned activities. These instructions will be updated as each one arrives.</p>
+    <p>Still to come in version 0.1: a journal of conversations and visits, contact reminders, relationships and households, and planned activities. These instructions will be updated as each one arrives.</p>
   </section>
 </main>
-<script src="js/mdw-prefs.js?v=1"></script>
-<script src="js/app.js?v=1"></script>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
 <script>
 renderNav('help.html');
 const topics = [...document.querySelectorAll('.help-topic')];

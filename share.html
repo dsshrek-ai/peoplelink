@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Share group · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+<script>
+renderNav('groups.html');
+const contentEl = document.getElementById('content');
+const groupId = Number(qsParam('group'));
+
+function render(G, members) {
+  const withPhotos = members.filter(p => p.PhotoKey).length;
+  contentEl.innerHTML = `
+    <p class="small"><a href="group.html?id=${G.Id}">← ${escapeHtml(G.Name)}</a></p>
+    <h1 class="page-title">📤 Share "${escapeHtml(G.Name)}"</h1>
+    <div class="card">
+      <h2>How sharing works</h2>
+      <ol>
+        <li>You send a copy of this group to another PeopleLink user.</li>
+        <li>They see an invitation, check for people they already have, and choose which of their groups to put everyone in.</li>
+        <li>They get <strong>their own copy</strong>. Changes either of you make later are <strong>not</strong> passed along.</li>
+      </ol>
+      <p class="small"><strong>Shared:</strong> names, nicknames, phones, emails, addresses, and the group's name and description.</p>
+      <p class="small muted"><strong>Never shared:</strong> notes, birthdays, anniversaries, work details, pins, status, or the other groups people are in.</p>
+    </div>
+    <div class="card">
+      <h2>${members.length} ${members.length === 1 ? 'person' : 'people'} will be shared</h2>
+      ${members.length ? `<ul class="person-list">${members.map(p => `
+        <li class="person-row">${avatarHtml(p, 'sm')}<span class="txt"><div class="name">${escapeHtml(displayName(p))}</div>
+          <div class="sub">${escapeHtml([p.Phones.length ? `${p.Phones.length} phone${p.Phones.length > 1 ? 's' : ''}` : '', p.Emails.length ? `${p.Emails.length} email${p.Emails.length > 1 ? 's' : ''}` : '', p.Addresses.length ? `${p.Addresses.length} address${p.Addresses.length > 1 ? 'es' : ''}` : ''].filter(Boolean).join(' · ') || 'name only')}</div></span></li>`).join('')}</ul>`
+        : '<p class="empty">This group is empty — add people before sharing it.</p>'}
+      <p class="muted small" style="margin-top:0.5rem">Archived people in the group aren't shared.</p>
+    </div>
+    ${members.length ? `
+    <div class="card">
+      <h2>Send to</h2>
+      <label for="to">Their MyDataWorld username</label>
+      <input type="text" id="to" autocapitalize="none" autocomplete="off" placeholder="name@example.com">
+      ${withPhotos ? `<label class="inline" style="margin-top:0.6rem"><input type="checkbox" id="photos"> Include profile photos (${withPhotos})</label>` : ''}
+      <div id="err"></div>
+      <div class="btn-row" style="margin-top:0.8rem"><button type="button" class="btn" id="send">Send invitation</button>
+        <a class="btn secondary" href="group.html?id=${G.Id}">Cancel</a></div>
+    </div>` : ''}`;
+  const send = document.getElementById('send');
+  if (!send) return;
+  send.addEventListener('click', async () => {
+    const to = document.getElementById('to').value.trim();
+    const err = document.getElementById('err');
+    err.innerHTML = '';
+    if (!to) { err.innerHTML = '<p class="err">Enter their username.</p>'; return; }
+    send.disabled = true;
+    try {
+      const photos = document.getElementById('photos');
+      const res = await postAction('createShare', { groupId: G.Id, username: to, includePhotos: !!(photos && photos.checked) });
+      contentEl.innerHTML = `<div class="card"><h2>✅ Invitation sent</h2>
+        <p>${escapeHtml(res.To)} will see "${escapeHtml(G.Name)}" (${res.Count} ${res.Count === 1 ? 'person' : 'people'}) the next time they open PeopleLink.</p>
+        <p class="muted small">You can cancel it from Invitations until they accept.</p>
+        <div class="btn-row"><a class="btn" href="group.html?id=${G.Id}">Back to the group</a><a class="btn secondary" href="invitations.html">Invitations</a></div></div>`;
+    } catch (e) {
+      err.innerHTML = `<p class="err">${escapeHtml(errorText(e, "Couldn't send the invitation."))}</p>`;
+      send.disabled = false;
+    }
+  });
+}
+
+(async () => {
+  try {
+    const data = await fetchData('people');
+    const G = data.Groups.find(g => g.Id === groupId);
+    if (!G) { contentEl.innerHTML = '<p class="note">That group isn\'t in your list. <a href="groups.html">Back to Groups</a></p>'; return; }
+    const members = data.People.filter(p => p.GroupIds.includes(groupId) && p.Status !== 'archived')
+      .sort((a, b) => sortKey(a, 'first').localeCompare(sortKey(b, 'first')));
+    render(G, members);
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>

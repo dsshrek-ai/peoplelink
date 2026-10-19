@@ -8,20 +8,21 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>Groups · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=1">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page" id="content">Loading&hellip;</main>
 <dialog id="group-dlg" aria-label="Group"></dialog>
-<script src="js/mdw-prefs.js?v=1"></script>
-<script src="js/app.js?v=1"></script>
-<script src="js/groups.js?v=1"></script>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+<script src="js/groups.js?v=2"></script>
 <script>
 renderNav('groups.html');
 const contentEl = document.getElementById('content');
 let GROUPS = [];
 let showArchived = false;
+let PENDING = 0;
 
 function card(g) {
   return `<li><a class="group-card${g.Archived ? ' archived' : ''}" href="group.html?id=${g.Id}" style="--gc:${escapeHtml(g.Color || '#0f766e')}">
@@ -36,7 +37,8 @@ function render() {
   const archived = GROUPS.filter(g => g.Archived);
   contentEl.innerHTML = `
     <div class="card-head"><h1 class="page-title" style="margin:0">Groups</h1><button type="button" class="btn small" id="new-btn">+ New group</button></div>
-    <p class="muted">A person can be in as many groups as you like. Removing someone from a group never deletes them.</p>
+    <p class="muted">A person can be in as many groups as you like. Removing someone from a group never deletes them.
+      <a href="invitations.html">📨 Invitations${PENDING ? ` (${PENDING} waiting)` : ''}</a></p>
     ${active.length ? `<ul class="group-list">${active.map(card).join('')}</ul>` : '<div class="card"><p class="empty">No groups yet. Make one for Family, Neighbors, Choir — whatever helps.</p></div>'}
     ${archived.length ? `
       <p style="margin-top:1.2rem"><button type="button" class="btn secondary small" id="arch-btn">${showArchived ? 'Hide' : 'Show'} ${archived.length} archived</button></p>
@@ -48,7 +50,9 @@ function render() {
 
 (async () => {
   try {
-    GROUPS = (await fetchData('bootstrap')).Groups;
+    const boot = await fetchData('bootstrap');
+    GROUPS = boot.Groups;
+    PENDING = boot.PendingInvitations;
     render();
   } catch (e) {
     handleError(contentEl, e);

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Invitations · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+<script>
+renderNav('groups.html');
+const contentEl = document.getElementById('content');
+
+function when(ts) {
+  if (!ts) return '';
+  const d = new Date(ts.replace(' ', 'T'));
+  return isNaN(d) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function statusText(inv) {
+  if (inv.Status === 'accepted') return `Accepted ${when(inv.RespondedAt)}${inv.Summary ? ` — ${inv.Summary}` : ''}`;
+  if (inv.Status === 'declined') return `Declined ${when(inv.RespondedAt)}`;
+  if (inv.Status === 'cancelled') return `Cancelled ${when(inv.RespondedAt)}`;
+  return `Waiting since ${when(inv.CreatedAt)}`;
+}
+
+function render(data) {
+  const pending = data.Incoming.filter(i => i.Status === 'pending');
+  const past = data.Incoming.filter(i => i.Status !== 'pending');
+  contentEl.innerHTML = `
+    <p class="small"><a href="groups.html">← Groups</a></p>
+    <h1 class="page-title">📨 Invitations</h1>
+    <div class="card">
+      <h2>Shared with you</h2>
+      ${pending.length ? `<ul class="date-list">${pending.map(i => `<li>
+        <span style="flex:1"><strong>${i.GroupIcon ? escapeHtml(i.GroupIcon) + ' ' : ''}${escapeHtml(i.GroupName)}</strong>
+          <div class="small muted">from ${escapeHtml(i.From)} · ${i.Count} ${i.Count === 1 ? 'person' : 'people'} · ${escapeHtml(when(i.CreatedAt))}</div></span>
+        <a class="btn small" href="invitation.html?id=${i.Id}">Review</a></li>`).join('')}</ul>`
+        : '<p class="empty">Nothing waiting for you.</p>'}
+      ${past.length ? `<details style="margin-top:0.6rem"><summary class="small muted">Earlier (${past.length})</summary><ul class="date-list">${past.map(i => `<li>
+        <span style="flex:1">${escapeHtml(i.GroupName)} <span class="small muted">from ${escapeHtml(i.From)} · ${escapeHtml(statusText(i))}</span></span></li>`).join('')}</ul></details>` : ''}
+    </div>
+    <div class="card">
+      <h2>You shared</h2>
+      ${data.Outgoing.length ? `<ul class="date-list">${data.Outgoing.map(i => `<li>
+        <span style="flex:1"><strong>${escapeHtml(i.GroupName)}</strong> → ${escapeHtml(i.To)}
+          <div class="small muted">${i.Count} ${i.Count === 1 ? 'person' : 'people'} · ${escapeHtml(statusText(i))}</div></span>
+        ${i.Status === 'pending' ? `<button type="button" class="btn small danger" data-cancel="${i.Id}">Cancel</button>` : ''}</li>`).join('')}</ul>`
+        : '<p class="empty">You haven\'t shared a group yet. Open a group and tap <strong>📤 Share</strong>.</p>'}
+    </div>`;
+  contentEl.querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('Cancel this invitation? They won\'t be able to accept it.')) return;
+    try {
+      await postAction('cancelShare', { id: Number(b.dataset.cancel) });
+      showStatus('Invitation cancelled.');
+      load();
+    } catch (e) {
+      showStatus(errorText(e, "Couldn't cancel it."), true);
+    }
+  }));
+}
+
+async function load() {
+  try {
+    render(await fetchData('invitations'));
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+}
+load();
+</script>
+</body>
+</html>

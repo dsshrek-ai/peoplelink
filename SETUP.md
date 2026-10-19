@@ -44,12 +44,20 @@ don't keep a stale copy.
   in `api/uploads/` under random 32-character names, and re-encoded by the
   server with GD.
 - Notes are private and are never returned in the People list — only on the
-  person's own page.
+  person's own page. So exports (built from the People list) and group shares
+  (built server-side from basic fields only) can't include them.
+- CSV import/export happens in the browser (`js/transfer.js`); the server
+  only receives the already-decided create / merge / skip items, in batches
+  of 200. Merge only fills empty fields and adds new phones/emails/addresses.
 
 ## Testing locally
 
-`tests/api.test.mjs` runs the Milestone A acceptance checks against a
+`tests/api.test.mjs` (Milestone A) and `tests/api-b.test.mjs` (Milestone B:
+import engine and group sharing) run the acceptance checks against a
 **fresh** test database (Hub tables + `schema.sql`, users `alice` / `bob`
 granted, `carol` not, all with password `pw`):
 
-    node tests/api.test.mjs http://127.0.0.1:8098/api/api.php path/to/small.jpg
+    node tests/api.test.mjs   http://127.0.0.1:8098/api/api.php path/to/small.jpg
+    node tests/api-b.test.mjs http://127.0.0.1:8098/api/api.php path/to/small.jpg
+
+(Use a fresh database for each file.)

@@ -109,3 +109,33 @@ ON DUPLICATE KEY UPDATE
 -- SELECT u.id, a.id FROM users u JOIN apps a ON a.app_key = 'peoplelink'
 -- WHERE u.username = 'you@example.com'
 -- ON DUPLICATE KEY UPDATE user_id = app_access.user_id;
+
+-- ---------- 2026-10-19: Milestone B — group sharing (copy, not sync) ----------
+-- Import/export need no tables. A share is a snapshot: the sender's basic
+-- contact fields (names, phones, emails, addresses -- never notes, dates,
+-- pins or groups) are frozen into `payload` when the invitation is sent.
+-- Accepting copies them into the recipient's own records; nothing links
+-- the two sides afterwards. Photo files, when included, are copied at send
+-- time under new keys (so the sender changing a photo later doesn't
+-- matter) and deleted again if the invitation is declined or cancelled.
+
+CREATE TABLE pl_share_invitations (
+  id                 INT AUTO_INCREMENT PRIMARY KEY,
+  from_user_id       INT NOT NULL,
+  to_user_id         INT NOT NULL,
+  group_name         VARCHAR(100) NOT NULL,
+  group_description  TEXT NULL,
+  group_color        CHAR(7) NULL,
+  group_icon         VARCHAR(16) NULL,
+  payload            MEDIUMTEXT NOT NULL,   -- JSON array of basic contacts
+  people_count       INT NOT NULL DEFAULT 0,
+  include_photos     TINYINT(1) NOT NULL DEFAULT 0,
+  status             ENUM('pending','accepted','declined','cancelled') NOT NULL DEFAULT 'pending',
+  result_summary     VARCHAR(255) NULL,
+  created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  responded_at       TIMESTAMP NULL DEFAULT NULL,
+  KEY (to_user_id, status),
+  KEY (from_user_id, status),
+  FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (to_user_id)   REFERENCES users(id) ON DELETE CASCADE
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

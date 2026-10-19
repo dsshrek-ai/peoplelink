@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Import · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+<script src="js/transfer.js?v=2"></script>
+<script>
+renderNav('people.html');
+const contentEl = document.getElementById('content');
+const BATCH = 200;
+
+let PEOPLE = [];
+let GROUPS = [];
+let parsed = null;     // result of contactsFromCsv
+let fileName = '';
+const chosenLabels = new Set();
+const chosenOrgs = new Set();
+let pinStarred = true;
+let rows = [];         // [{ rec, match, action, personId }]
+
+function steps(n) {
+  const names = ['Choose file', 'Groups', 'Duplicates', 'Import'];
+  return `<ol class="steps">${names.map((s, i) => `<li class="${i + 1 === n ? 'on' : i + 1 < n ? 'done' : ''}">${s}</li>`).join('')}</ol>`;
+}
+
+// ---- step 1 ----
+function stepFile(err) {
+  contentEl.innerHTML = `
+    <p class="small"><a href="people.html">← People</a></p>
+    <h1 class="page-title">Import contacts</h1>
+    ${steps(1)}
+    <div class="card">
+      <h2>Choose a CSV file</h2>
+      <ol>
+        <li>On a computer, open <strong>contacts.google.com</strong>.</li>
+        <li>Tick the contacts you want (or pick a label on the left), then choose <strong>Export</strong> → <strong>Google CSV</strong>.</li>
+        <li>Come back here and choose that file.</li>
+      </ol>
+      <p class="muted small">A CSV exported from PeopleLink works here too. Nothing is saved until the last step, and you can cancel at any point.</p>
+      <label class="btn" style="margin-top:0.6rem">📄 Choose CSV file<input type="file" id="file" accept=".csv,text/csv" hidden></label>
+      ${err ? `<p class="err">${escapeHtml(err)}</p>` : ''}
+    </div>`;
+  document.getElementById('file').addEventListener('change', async e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try {
+      fileName = f.name;
+      parsed = contactsFromCsv(await readFileText(f));
+      chosenLabels.clear();
+      chosenOrgs.clear();
+      [...parsed.labels.keys()].filter(l => !isGoogleImportLabel(l)).forEach(l => chosenLabels.add(l));
+      stepGroups();
+    } catch (ex) {
+      stepFile(ex.message);
+    }
+  });
+}
+
+// ---- step 2 ----
+function stepGroups() {
+  const labels = [...parsed.labels.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const existing = new Set(GROUPS.map(g => g.Name.toLowerCase()));
+  const starred = parsed.records.filter(r => r.starred).length;
+  // Organizations shared by 2+ contacts (e.g. a choir kept as "Organization")
+  // can become groups too.
+  const orgCounts = new Map();
+  parsed.records.forEach(r => { if (r.organization) orgCounts.set(r.organization, (orgCounts.get(r.organization) || 0) + 1); });
+  const orgs = [...orgCounts.entries()].filter(([, n]) => n >= 2).sort((a, b) => a[0].localeCompare(b[0]));
+  contentEl.innerHTML = `
+    <h1 class="page-title">Import contacts</h1>
+    ${steps(2)}
+    <div class="card">
+      <h2>${escapeHtml(fileName)}</h2>
+      <p><strong>${parsed.records.length}</strong> contact${parsed.records.length === 1 ? '' : 's'} ready to import${parsed.format === 'google' ? ' from Google Contacts' : ''}.</p>
+      ${parsed.invalid.length ? `<details><summary class="err">${parsed.invalid.length} row${parsed.invalid.length === 1 ? '' : 's'} can't be imported</summary>
+        <ul class="small">${parsed.invalid.map(x => `<li>Row ${x.row}: ${escapeHtml(x.reason)}</li>`).join('')}</ul></details>` : ''}
+      ${parsed.ignored.length ? `<p class="muted small">Not imported (PeopleLink has no place for them yet): ${parsed.ignored.map(escapeHtml).join(', ')}.</p>` : ''}
+    </div>
+    <div class="card">
+      <h2>Labels → groups</h2>
+      ${labels.length ? `
+        <p class="muted small">Ticked labels become PeopleLink groups (an existing group with the same name is reused). Google's automatic "Imported on…" labels start unticked.</p>
+        <div class="pick-list">${labels.map(([name, n]) => `
+          <label><input type="checkbox" class="lbl" value="${escapeHtml(name)}" ${chosenLabels.has(name) ? 'checked' : ''}>
+            ${escapeHtml(name)} <span class="muted small">· ${n} ${n === 1 ? 'person' : 'people'}${existing.has(name.toLowerCase()) ? ' · existing group' : ' · new group'}</span></label>`).join('')}</div>`
+        : '<p class="empty">This file has no labels, so no groups will be created.</p>'}
+      ${orgs.length ? `
+        <h3 style="margin-top:1rem">Organizations → groups</h3>
+        <p class="muted small">These organizations are shared by several contacts. Tick one to also put those people in a group with that name.</p>
+        <div class="pick-list">${orgs.map(([name, n]) => `
+          <label><input type="checkbox" class="org" value="${escapeHtml(name)}" ${chosenOrgs.has(name) ? 'checked' : ''}>
+            ${escapeHtml(name)} <span class="muted small">· ${n} people${existing.has(name.toLowerCase()) ? ' · existing group' : ' · new group'}</span></label>`).join('')}</div>` : ''}
+      ${starred ? `<label class="inline" style="margin-top:0.7rem"><input type="checkbox" id="pin" ${pinStarred ? 'checked' : ''}> Pin the ${starred} starred contact${starred === 1 ? '' : 's'} to my Dashboard</label>` : ''}
+    </div>
+    <div class="btn-row" style="justify-content:flex-end">
+      <button type="button" class="btn secondary" id="back">Start over</button>
+      <button type="button" class="btn" id="next" ${parsed.records.length ? '' : 'disabled'}>Next: check for duplicates</button>
+    </div>`;
+  document.getElementById('back').addEventListener('click', () => stepFile());
+  document.getElementById('next').addEventListener('click', () => {
+    chosenLabels.clear();
+    document.querySelectorAll('.lbl:checked').forEach(i => chosenLabels.add(i.value));
+    chosenOrgs.clear();
+    document.querySelectorAll('.org:checked').forEach(i => chosenOrgs.add(i.value));
+    const pin = document.getElementById('pin');
+    pinStarred = pin ? pin.checked : false;
+    const match = buildMatcher(PEOPLE);
+    rows = parsed.records.map(rec => {
+      const m = match(rec);
+      return { rec, match: m, action: m ? 'merge' : 'create', personId: m ? m.person.Id : 0 };
+    });
+    stepDuplicates();
+  });
+}
+
+// ---- step 3 ----
+function incomingName(rec) {
+  return displayName({ FirstName: rec.firstName, LastName: rec.lastName, Nickname: rec.nickname, Organization: rec.organization });
+}
+
+function incomingDetail(rec) {
+  return [...rec.phones.map(x => x.value), ...rec.emails.map(x => x.value)].slice(0, 2).join(' · ');
+}
+
+function stepDuplicates() {
+  const matched = rows.filter(r => r.match);
+  contentEl.innerHTML = `
+    <h1 class="page-title">Import contacts</h1>
+    ${steps(3)}
+    <div class="card">
+      <h2>Possible duplicates</h2>
+      ${matched.length ? `
+        <p class="muted small">These look like people you already have. <strong>Merge</strong> only fills in what's missing and adds new phones, emails and addresses — it never changes or removes anything you already have, including notes.</p>
+        <div class="btn-row" style="margin-bottom:0.6rem">
+          <button type="button" class="btn secondary small" data-all="merge">Merge all</button>
+          <button type="button" class="btn secondary small" data-all="skip">Skip all</button>
+          <button type="button" class="btn secondary small" data-all="create">Add all as new</button>
+        </div>
+        <ul class="dup-list">${matched.map(r => {
+          const i = rows.indexOf(r);
+          return `<li>
+            <div class="dup-who"><strong>${escapeHtml(incomingName(r.rec))}</strong> <span class="muted small">${escapeHtml(incomingDetail(r.rec))}</span>
+              <div class="small">matches <a href="person.html?id=${r.match.person.Id}" target="_blank">${escapeHtml(displayName(r.match.person))}</a> <span class="muted">(${escapeHtml(r.match.reason)})</span></div></div>
+            <select data-row="${i}" aria-label="What to do with ${escapeHtml(incomingName(r.rec))}">
+              <option value="merge" ${r.action === 'merge' ? 'selected' : ''}>Merge</option>
+              <option value="create" ${r.action === 'create' ? 'selected' : ''}>Add as new</option>
+              <option value="skip" ${r.action === 'skip' ? 'selected' : ''}>Skip</option>
+            </select></li>`;
+        }).join('')}</ul>` : '<p>No duplicates found — everyone in the file is new to you.</p>'}
+    </div>
+    <div class="card" id="summary"></div>
+    <div class="btn-row" style="justify-content:flex-end">
+      <button type="button" class="btn secondary" id="back">Back</button>
+      <a class="btn secondary" href="people.html">Cancel</a>
+      <button type="button" class="btn" id="go">Import</button>
+    </div>`;
+  const summarize = () => {
+    const c = { create: 0, merge: 0, skip: 0 };
+    rows.forEach(r => c[r.action]++);
+    document.getElementById('summary').innerHTML = `<h2>Ready</h2>
+      <p>${c.create} new · ${c.merge} merged · ${c.skip} skipped${parsed.invalid.length ? ` · ${parsed.invalid.length} can't be imported` : ''}</p>
+      <p class="muted small">${chosenLabels.size + chosenOrgs.size ? `Groups: ${[...chosenLabels, ...chosenOrgs].map(escapeHtml).join(', ')}.` : 'No groups will be added.'}</p>`;
+  };
+  contentEl.querySelectorAll('select[data-row]').forEach(s => s.addEventListener('change', () => { rows[Number(s.dataset.row)].action = s.value; summarize(); }));
+  contentEl.querySelectorAll('[data-all]').forEach(b => b.addEventListener('click', () => {
+    rows.filter(r => r.match).forEach(r => { r.action = b.dataset.all; });
+    stepDuplicates();
+  }));
+  document.getElementById('back').addEventListener('click', stepGroups);
+  document.getElementById('go').addEventListener('click', runImport);
+  summarize();
+}
+
+// ---- step 4 ----
+function recordFor(r) {
+  const rec = r.rec;
+  return {
+    firstName: rec.firstName, middleName: rec.middleName, lastName: rec.lastName, nickname: rec.nickname,
+    organization: rec.organization, jobTitle: rec.jobTitle, notes: rec.notes,
+    birthday: rec.birthday, anniversary: rec.anniversary,
+    phones: rec.phones, emails: rec.emails, addresses: rec.addresses,
+    groupNames: [...rec.labels.filter(l => chosenLabels.has(l)), ...(chosenOrgs.has(rec.organization) ? [rec.organization] : [])],
+    pinned: pinStarred && rec.starred,
+  };
+}
+
+async function runImport() {
+  const items = rows.map(r => ({ action: r.action, personId: r.personId, record: recordFor(r) }));
+  const total = { Created: 0, Merged: 0, Skipped: 0, Problems: [] };
+  contentEl.innerHTML = `<h1 class="page-title">Import contacts</h1>${steps(4)}<div class="card"><h2>Importing…</h2><p id="prog">0 of ${items.length}</p><p class="muted small">Please keep this page open.</p></div>`;
+  let done = 0;
+  try {
+    for (let i = 0; i < items.length; i += BATCH) {
+      const res = await postAction('importPeople', { items: items.slice(i, i + BATCH) });
+      total.Created += res.Created; total.Merged += res.Merged; total.Skipped += res.Skipped;
+      res.Problems.forEach(p => total.Problems.push({ ...p, Index: p.Index + i }));
+      done = Math.min(items.length, i + BATCH);
+      document.getElementById('prog').textContent = `${done} of ${items.length}`;
+    }
+  } catch (e) {
+    contentEl.innerHTML = `<h1 class="page-title">Import contacts</h1><div class="card"><h2>The import stopped</h2>
+      <p class="err">${escapeHtml(errorText(e, 'Something went wrong.'))}</p>
+      <p>${done} of ${items.length} were saved before it stopped (${total.Created} added, ${total.Merged} merged). Importing the same file again is safe — the people already added will show up as duplicates you can skip.</p>
+      <p><a class="btn" href="people.html">Go to People</a></p></div>`;
+    return;
+  }
+  contentEl.innerHTML = `
+    <h1 class="page-title">Import contacts</h1>${steps(5)}
+    <div class="card">
+      <h2>✅ Import finished</h2>
+      <ul>
+        <li><strong>${total.Created}</strong> added</li>
+        <li><strong>${total.Merged}</strong> merged into people you already had</li>
+        <li><strong>${total.Skipped}</strong> skipped</li>
+        ${parsed.invalid.length || total.Problems.length ? `<li><strong>${parsed.invalid.length + total.Problems.length}</strong> couldn't be imported</li>` : ''}
+      </ul>
+      ${total.Problems.length ? `<ul class="small">${total.Problems.map(p => `<li>${escapeHtml(incomingName(rows[p.Index].rec))}: ${escapeHtml(p.Error)}</li>`).join('')}</ul>` : ''}
+      <div class="btn-row"><a class="btn" href="people.html">See People</a><a class="btn secondary" href="groups.html">See Groups</a></div>
+    </div>`;
+}
+
+(async () => {
+  try {
+    const data = await fetchData('people');
+    PEOPLE = data.People;
+    GROUPS = data.Groups;
+    stepFile();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>

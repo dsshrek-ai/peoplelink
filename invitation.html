@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Shared group · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+<script src="js/transfer.js?v=2"></script>
+<script>
+renderNav('groups.html');
+const contentEl = document.getElementById('content');
+const invId = Number(qsParam('id'));
+let INV = null;
+let GROUPS = [];
+let rows = [];   // [{ c, match, action, personId }]
+let groupMode = 'new';
+
+function cName(c) {
+  return displayName({ FirstName: c.firstName, LastName: c.lastName, Nickname: c.nickname });
+}
+
+function cDetail(c) {
+  return [...(c.phones || []).map(x => x.value), ...(c.emails || []).map(x => x.value)].slice(0, 2).join(' · ');
+}
+
+function render() {
+  const taken = GROUPS.some(g => g.Name.toLowerCase() === INV.GroupName.toLowerCase());
+  const matched = rows.filter(r => r.match).length;
+  contentEl.innerHTML = `
+    <p class="small"><a href="invitations.html">← Invitations</a></p>
+    <h1 class="page-title">${INV.GroupIcon ? escapeHtml(INV.GroupIcon) + ' ' : ''}${escapeHtml(INV.GroupName)}</h1>
+    <div class="card">
+      <p><strong>${escapeHtml(INV.From)}</strong> shared ${INV.Count} ${INV.Count === 1 ? 'person' : 'people'} with you${INV.IncludesPhotos ? ', with photos' : ''}.</p>
+      ${INV.GroupDescription ? `<p class="notes-text muted">${escapeHtml(INV.GroupDescription)}</p>` : ''}
+      <p class="small muted">Accepting gives you your own copy — names, phones, emails and addresses. Later changes on either side aren't passed along.</p>
+    </div>
+
+    <div class="card">
+      <h2>Put them in</h2>
+      <label class="inline"><input type="radio" name="gmode" value="new" ${groupMode === 'new' ? 'checked' : ''}> A new group named
+        <input type="text" id="gname" style="width:auto;flex:1" maxlength="100" value="${escapeHtml(taken ? `${INV.GroupName} (from ${INV.From})` : INV.GroupName)}"></label>
+      ${GROUPS.length ? `<label class="inline"><input type="radio" name="gmode" value="existing" ${groupMode === 'existing' ? 'checked' : ''}> One of my groups:
+        <select id="gexisting" style="width:auto">${GROUPS.map(g => `<option value="${g.Id}" ${g.Name.toLowerCase() === INV.GroupName.toLowerCase() ? 'selected' : ''}>${escapeHtml(g.Name)}</option>`).join('')}</select></label>` : ''}
+    </div>
+
+    <div class="card">
+      <h2>People</h2>
+      ${matched ? `<p class="muted small">${matched} look${matched === 1 ? 's' : ''} like ${matched === 1 ? 'someone' : 'people'} you already have. <strong>Merge</strong> only adds what's missing — it never changes what you have.</p>` : ''}
+      <ul class="dup-list">${rows.map((r, i) => `<li>
+        <div class="dup-who"><strong>${escapeHtml(cName(r.c))}</strong> <span class="muted small">${escapeHtml(cDetail(r.c))}</span>
+          ${r.match ? `<div class="small">matches <a href="person.html?id=${r.match.person.Id}" target="_blank">${escapeHtml(displayName(r.match.person))}</a> <span class="muted">(${escapeHtml(r.match.reason)})</span></div>` : ''}</div>
+        <select data-row="${i}" aria-label="What to do with ${escapeHtml(cName(r.c))}">
+          ${r.match ? `<option value="merge" ${r.action === 'merge' ? 'selected' : ''}>Merge</option>` : ''}
+          <option value="create" ${r.action === 'create' ? 'selected' : ''}>Add</option>
+          <option value="skip" ${r.action === 'skip' ? 'selected' : ''}>Skip</option>
+        </select></li>`).join('')}</ul>
+    </div>
+    <div id="err"></div>
+    <div class="btn-row" style="justify-content:flex-end">
+      <button type="button" class="btn danger" id="decline">Decline</button>
+      <a class="btn secondary" href="invitations.html">Decide later</a>
+      <button type="button" class="btn" id="accept">Accept</button>
+    </div>`;
+
+  contentEl.querySelectorAll('input[name=gmode]').forEach(i => i.addEventListener('change', () => { groupMode = i.value; }));
+  document.getElementById('gname').addEventListener('focus', () => { groupMode = 'new'; contentEl.querySelector('input[name=gmode][value=new]').checked = true; });
+  const ge = document.getElementById('gexisting');
+  if (ge) ge.addEventListener('change', () => { groupMode = 'existing'; contentEl.querySelector('input[name=gmode][value=existing]').checked = true; });
+  contentEl.querySelectorAll('select[data-row]').forEach(s => s.addEventListener('change', () => { rows[Number(s.dataset.row)].action = s.value; }));
+  document.getElementById('accept').addEventListener('click', accept);
+  document.getElementById('decline').addEventListener('click', decline);
+}
+
+async function accept() {
+  const btn = document.getElementById('accept');
+  const err = document.getElementById('err');
+  err.innerHTML = '';
+  btn.disabled = true;
+  try {
+    const res = await postAction('acceptShare', {
+      id: INV.Id,
+      groupMode,
+      groupName: document.getElementById('gname').value.trim(),
+      groupId: groupMode === 'existing' ? Number(document.getElementById('gexisting').value) : 0,
+      decisions: rows.map((r, index) => ({ index, action: r.action, personId: r.personId })),
+    });
+    contentEl.innerHTML = `<div class="card"><h2>✅ Added to your PeopleLink</h2>
+      <ul><li><strong>${res.Created}</strong> added</li><li><strong>${res.Merged}</strong> merged</li><li><strong>${res.Skipped}</strong> skipped</li></ul>
+      <div class="btn-row"><a class="btn" href="group.html?id=${res.GroupId}">Open the group</a><a class="btn secondary" href="invitations.html">Invitations</a></div></div>`;
+  } catch (e) {
+    err.innerHTML = `<p class="err">${escapeHtml(errorText(e, "Couldn't accept it."))}</p>`;
+    btn.disabled = false;
+  }
+}
+
+async function decline() {
+  if (!confirm(`Decline "${INV.GroupName}" from ${INV.From}? Nothing will be added.`)) return;
+  try {
+    await postAction('declineShare', { id: INV.Id });
+    window.location.href = 'invitations.html';
+  } catch (e) {
+    showStatus(errorText(e, "Couldn't decline it."), true);
+  }
+}
+
+(async () => {
+  try {
+    const [inv, data] = await Promise.all([fetchData('invitation', { id: invId }), fetchData('people')]);
+    INV = inv.Invitation;
+    GROUPS = data.Groups.filter(g => !g.Archived);
+    if (INV.Status !== 'pending') {
+      contentEl.innerHTML = `<p class="note">This invitation was already ${escapeHtml(INV.Status)}. <a href="invitations.html">Back to Invitations</a></p>`;
+      return;
+    }
+    const match = buildMatcher(data.People);
+    rows = INV.People.map(c => {
+      const m = match(c);
+      return { c, match: m, action: m ? 'merge' : 'create', personId: m ? m.person.Id : 0 };
+    });
+    if (GROUPS.some(g => g.Name.toLowerCase() === INV.GroupName.toLowerCase())) groupMode = 'existing';
+    render();
+  } catch (e) {
+    if (e.status === 404) contentEl.innerHTML = '<p class="note">That invitation isn\'t for you, or it no longer exists. <a href="invitations.html">Back to Invitations</a></p>';
+    else handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>

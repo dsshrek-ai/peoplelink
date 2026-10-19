@@ -8,13 +8,13 @@
 <meta name="apple-mobile-web-app-title" content="PeopleLink">
 <title>People · PeopleLink</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
-<link rel="stylesheet" href="style.css?v=1">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <header class="site-header"></header>
 <main class="page" id="content">Loading&hellip;</main>
-<script src="js/mdw-prefs.js?v=1"></script>
-<script src="js/app.js?v=1"></script>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
 <script>
 renderNav('people.html');
 const contentEl = document.getElementById('content');
@@ -90,7 +90,7 @@ function renderShell() {
   const bulkGroupOpts = GROUPS.filter(g => !g.Archived).map(g => `<option value="${g.Id}">${escapeHtml(g.Name)}</option>`).join('');
   contentEl.innerHTML = `
     <div class="card-head"><h1 class="page-title" style="margin:0">People</h1>
-      <div class="btn-row"><button type="button" class="btn secondary small" id="select-btn">Select</button><a class="btn small" href="edit.html">+ Add person</a></div></div>
+      <div class="btn-row"><a class="btn secondary small" href="import.html">⬆️ Import</a><a class="btn secondary small" href="export.html">⬇️ Export</a><button type="button" class="btn secondary small" id="select-btn">Select</button><a class="btn small" href="edit.html">+ Add person</a></div></div>
     <div class="toolbar">
       <input type="search" class="search" id="q" placeholder="Search names, phones, emails, places…" value="${escapeHtml(filters.q)}" aria-label="Search people">
       <select id="f-group" aria-label="Group">
@@ -114,6 +114,7 @@ function renderShell() {
       <select id="bulk-status" aria-label="Status for selected people">
         <option value="">Set status…</option><option value="active">Active</option><option value="archived">Archived</option><option value="deceased">Deceased</option>
       </select>
+      <button type="button" class="btn secondary small" id="bulk-export">Export</button>
       <button type="button" class="btn secondary small" id="bulk-done">Done</button>
     </div>
     <div class="list-meta"><span id="count"></span>
@@ -131,6 +132,11 @@ function renderShell() {
   on('f-sort', 'change', e => { filters.sort = e.target.value; try { localStorage.setItem(SORT_KEY, filters.sort); } catch (x) {} renderList(); });
   on('select-btn', 'click', () => setSelecting(!selecting));
   on('bulk-done', 'click', () => setSelecting(false));
+  on('bulk-export', 'click', () => {
+    if (!selected.size) { showStatus('Select some people first.', true); return; }
+    try { sessionStorage.setItem('plExportIds', JSON.stringify([...selected])); } catch (e) {}
+    window.location.href = 'export.html?selected=1';
+  });
   on('bulk-all', 'click', () => { visible().forEach(p => selected.add(p.Id)); renderList(); });
   on('bulk-add', 'click', () => bulkGroup('add'));
   on('bulk-remove', 'click', () => bulkGroup('remove'));
@@ -157,7 +163,7 @@ function renderList() {
   document.getElementById('count').textContent = `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`;
   const list = document.getElementById('list');
   if (!PEOPLE.length) {
-    list.innerHTML = '<li class="person-row"><span class="empty">No one here yet. <a href="edit.html">Add your first person</a>.</span></li>';
+    list.innerHTML = '<li class="person-row"><span class="empty">No one here yet. <a href="edit.html">Add your first person</a> or <a href="import.html">import from Google Contacts</a>.</span></li>';
     return;
   }
   if (!rows.length) {

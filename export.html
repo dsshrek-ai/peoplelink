@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeopleLink">
+<title>Export · PeopleLink</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+<header class="site-header"></header>
+<main class="page narrow" id="content">Loading&hellip;</main>
+<script src="js/mdw-prefs.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+<script src="js/transfer.js?v=2"></script>
+<script>
+renderNav('people.html');
+const contentEl = document.getElementById('content');
+let PEOPLE = [];
+let GROUPS = [];
+
+// People > Select > Export hands over the chosen ids in sessionStorage.
+let selectedIds = [];
+try { selectedIds = JSON.parse(sessionStorage.getItem('plExportIds') || '[]'); } catch (e) { selectedIds = []; }
+
+const state = {
+  scope: qsParam('group') ? 'group' : (qsParam('selected') && selectedIds.length ? 'selected' : 'all'),
+  groupId: Number(qsParam('group')) || 0,
+  labels: 'all',          // for a group: 'only' that group's label, or 'all' of each person's
+  format: 'google',
+  includeInactive: false,
+};
+
+function chosenPeople() {
+  let list = PEOPLE;
+  if (state.scope === 'group') list = list.filter(p => p.GroupIds.includes(state.groupId));
+  if (state.scope === 'selected') list = list.filter(p => selectedIds.includes(p.Id));
+  if (!state.includeInactive && state.scope !== 'selected') list = list.filter(p => p.Status === 'active');
+  return list.slice().sort((a, b) => sortKey(a, 'last').localeCompare(sortKey(b, 'last')));
+}
+
+function labelsFor(p) {
+  if (state.scope === 'group' && state.labels === 'only') {
+    const g = GROUPS.find(x => x.Id === state.groupId);
+    return g ? [g.Name] : [];
+  }
+  return p.GroupIds.map(id => (GROUPS.find(g => g.Id === id) || {}).Name).filter(Boolean);
+}
+
+function render() {
+  const people = chosenPeople();
+  const files = state.format === 'google' ? Math.max(1, Math.ceil(people.length / GOOGLE_MAX_ROWS)) : 1;
+  const groupOpts = GROUPS.map(g => `<option value="${g.Id}" ${g.Id === state.groupId ? 'selected' : ''}>${escapeHtml(g.Name)}</option>`).join('');
+  contentEl.innerHTML = `
+    <p class="small"><a href="people.html">← People</a></p>
+    <h1 class="page-title">Export contacts</h1>
+    <div class="card">
+      <h2>Who</h2>
+      <label class="inline"><input type="radio" name="scope" value="all" ${state.scope === 'all' ? 'checked' : ''}> Everyone</label>
+      <label class="inline"><input type="radio" name="scope" value="group" ${state.scope === 'group' ? 'checked' : ''}> One group:
+        <select id="group" style="width:auto" ${GROUPS.length ? '' : 'disabled'}>${groupOpts || '<option>No groups</option>'}</select></label>
+      ${selectedIds.length ? `<label class="inline"><input type="radio" name="scope" value="selected" ${state.scope === 'selected' ? 'checked' : ''}> The ${selectedIds.length} people I selected</label>` : ''}
+      ${state.scope !== 'selected' ? `<label class="inline" style="margin-top:0.5rem"><input type="checkbox" id="inactive" ${state.includeInactive ? 'checked' : ''}> Include archived and deceased people</label>` : ''}
+      ${state.scope === 'group' ? `
+        <p style="margin:0.7rem 0 0.2rem"><strong>Group labels to include</strong></p>
+        <label class="inline"><input type="radio" name="labels" value="all" ${state.labels === 'all' ? 'checked' : ''}> All of each person's groups</label>
+        <label class="inline"><input type="radio" name="labels" value="only" ${state.labels === 'only' ? 'checked' : ''}> Only this group</label>` : ''}
+    </div>
+    <div class="card">
+      <h2>Format</h2>
+      <label class="inline"><input type="radio" name="format" value="google" ${state.format === 'google' ? 'checked' : ''}> <span><strong>Google Contacts CSV</strong> — to import at contacts.google.com (Import → choose file)</span></label>
+      <label class="inline"><input type="radio" name="format" value="standard" ${state.format === 'standard' ? 'checked' : ''}> <span><strong>Standard CSV</strong> — easy to open in Excel or Google Sheets</span></label>
+    </div>
+    <div class="card">
+      <h2>Preview</h2>
+      <p><strong>${people.length}</strong> ${people.length === 1 ? 'person' : 'people'}${files > 1 ? ` in ${files} files (Google takes at most ${GOOGLE_MAX_ROWS.toLocaleString()} per import)` : ''}.</p>
+      <p class="small"><strong>Included:</strong> names, nickname, phones, emails, addresses, organization and job title, birthday, anniversary, ${state.scope === 'group' && state.labels === 'only' ? 'this group as a label' : 'groups as labels'}${state.format === 'standard' ? ', occupation, status' : ''}.</p>
+      <p class="small muted"><strong>Never included:</strong> notes, photos, pins.</p>
+      ${people.length ? `<p class="small muted">First few: ${people.slice(0, 5).map(p => escapeHtml(displayName(p))).join(', ')}${people.length > 5 ? '…' : ''}</p>` : ''}
+      <div class="btn-row"><button type="button" class="btn" id="dl" ${people.length ? '' : 'disabled'}>⬇️ Download${files > 1 ? ` ${files} files` : ''}</button></div>
+    </div>`;
+
+  contentEl.querySelectorAll('input[name=scope]').forEach(i => i.addEventListener('change', () => { state.scope = i.value; render(); }));
+  contentEl.querySelectorAll('input[name=labels]').forEach(i => i.addEventListener('change', () => { state.labels = i.value; render(); }));
+  contentEl.querySelectorAll('input[name=format]').forEach(i => i.addEventListener('change', () => { state.format = i.value; render(); }));
+  const g = document.getElementById('group');
+  if (g) g.addEventListener('change', () => { state.groupId = Number(g.value); state.scope = 'group'; render(); });
+  const ina = document.getElementById('inactive');
+  if (ina) ina.addEventListener('change', () => { state.includeInactive = ina.checked; render(); });
+  document.getElementById('dl').addEventListener('click', () => download(people));
+}
+
+function download(people) {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const g = GROUPS.find(x => x.Id === state.groupId);
+  const base = 'PeopleLink' + (state.scope === 'group' && g ? '-' + g.Name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') : '') + '-' + stamp;
+  if (state.format === 'standard') {
+    downloadText(standardCsv(people, labelsFor), `${base}.csv`);
+    return;
+  }
+  const parts = Math.ceil(people.length / GOOGLE_MAX_ROWS);
+  for (let i = 0; i < parts; i++) {
+    const chunk = people.slice(i * GOOGLE_MAX_ROWS, (i + 1) * GOOGLE_MAX_ROWS);
+    // Stagger the downloads a little so browsers don't drop the later ones.
+    setTimeout(() => downloadText(googleCsv(chunk, labelsFor), `${base}-google${parts > 1 ? '-' + (i + 1) : ''}.csv`), i * 600);
+  }
+}
+
+(async () => {
+  try {
+    const data = await fetchData('people');
+    PEOPLE = data.People;
+    GROUPS = data.Groups;
+    if (state.scope === 'group' && !GROUPS.some(g => g.Id === state.groupId)) state.scope = 'all';
+    if (!state.groupId && GROUPS[0]) state.groupId = GROUPS[0].Id;
+    render();
+  } catch (e) {
+    handleError(contentEl, e);
+  }
+})();
+</script>
+</body>
+</html>

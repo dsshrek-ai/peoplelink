@@ -1,7 +1,7 @@
 // PeopleLink shared helpers: config, login, API calls, navigation, and the
 // small formatting functions every page uses.
 
-const APP_VERSION = '0.1.0 (Milestone A)';
+const APP_VERSION = '0.1.0 (Milestone B)';
 
 const CONFIG = {
   API_URL: 'https://seniorfamily.org/peoplelink-api/api.php',
